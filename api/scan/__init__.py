@@ -22,17 +22,18 @@ OPENAI_KEY = os.getenv("OPENAI_KEY")
 OPENAI_DEPLOYMENT = os.getenv("OPENAI_DEPLOYMENT")
 OPENAI_DEPLOYMENT_VISION = os.getenv("OPENAI_DEPLOYMENT_VISION")
 
-doc_client = DocumentIntelligenceClient(
-    endpoint=DOC_INTEL_ENDPOINT,
-    credential=AzureKeyCredential(DOC_INTEL_KEY)
-)
+def get_doc_client():
+    return DocumentIntelligenceClient(
+        endpoint=os.getenv("DOC_INTEL_ENDPOINT"),
+        credential=AzureKeyCredential(os.getenv("DOC_INTEL_KEY"))
+    )
 
-openai_client = AzureOpenAI(
-    api_key=OPENAI_KEY,
-    azure_endpoint=OPENAI_ENDPOINT,
-    api_version="2024-02-15-preview"
-)
-
+def get_openai_client():
+    return AzureOpenAI(
+        api_key=os.getenv("OPENAI_KEY"),
+        azure_endpoint=os.getenv("OPENAI_ENDPOINT"),
+        api_version="2024-02-15-preview"
+    )
 
 # --------------------------------------------------
 # Helper functions (your existing logic)
