@@ -1,5 +1,0 @@
-azure-functions
-azure-ai-documentintelligence
-azure-core
-openai
-pymupdf
