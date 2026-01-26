@@ -146,5 +146,19 @@ def main(req: func.HttpRequest, context: func.Context) -> func.HttpResponse:
             mimetype="application/json"
         )
 
-    except Exception as e:
-        return func.HttpResponse(str(e), status_code=500)
+except Exception as e:
+    import traceback
+    return func.HttpResponse(
+        json.dumps({
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "env_check": {
+                "OPENAI_ENDPOINT": bool(os.getenv("OPENAI_ENDPOINT")),
+                "OPENAI_KEY": bool(os.getenv("OPENAI_KEY")),
+                "DOC_INTEL_ENDPOINT": bool(os.getenv("DOC_INTEL_ENDPOINT")),
+                "DOC_INTEL_KEY": bool(os.getenv("DOC_INTEL_KEY")),
+            }
+        }),
+        status_code=500,
+        mimetype="application/json"
+    )
