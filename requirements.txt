@@ -1,6 +1,2 @@
 azure-functions
-azure-ai-documentintelligence
-azure-core
-openai
-pymupdf
-azure-ai-formrecognizer
+azure-ai-formrecognizer==3.2.1
