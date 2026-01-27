@@ -3,9 +3,18 @@ import os
 from azure.ai.formrecognizer import DocumentAnalysisClient
 from azure.core.credentials import AzureKeyCredential
 
+
 def analyze_document(document_base64: str) -> str:
-    endpoint = os.environ["DOC_INTEL_ENDPOINT"]
-    key = os.environ["DOC_INTEL_KEY"]
+    """
+    Takes a Base64-encoded PDF and returns extracted text
+    using Azure Document Intelligence (prebuilt-read).
+    """
+
+    endpoint = os.environ.get("DOC_INTEL_ENDPOINT")
+    key = os.environ.get("DOC_INTEL_KEY")
+
+    if not endpoint or not key:
+        raise ValueError("DOC_INTEL_ENDPOINT or DOC_INTEL_KEY not set")
 
     client = DocumentAnalysisClient(
         endpoint=endpoint,
