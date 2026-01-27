@@ -1,13 +1,9 @@
 import json
 import azure.functions as func
+from shared import doc_intelligence
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
-    body = req.get_json()
-
     return func.HttpResponse(
-        json.dumps({
-            "status": "parsed",
-            "mode": body.get("mode")
-        }),
+        json.dumps({ "status": "shared import OK" }),
         mimetype="application/json"
     )
