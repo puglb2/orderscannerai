@@ -3,3 +3,4 @@ azure-ai-documentintelligence
 azure-core
 openai
 pymupdf
+azure-ai-formrecognizer
