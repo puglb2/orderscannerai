@@ -1,3 +1,6 @@
+import logging
+logging.warning(">>> UnderwritingAI module loaded")
+
 import json
 import azure.functions as func
 from .normalize import extract_medical_facts
