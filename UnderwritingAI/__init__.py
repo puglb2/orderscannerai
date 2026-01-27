@@ -7,7 +7,9 @@ import azure.functions as func
 from shared.doc_intelligence import analyze_document
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
+    result = analyze_document("test")
+
     return func.HttpResponse(
-        json.dumps({ "status": "SHARED_IMPORT_OK" }),
+        json.dumps({ "status": result }),
         mimetype="application/json"
     )
