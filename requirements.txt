@@ -1,2 +1,2 @@
 azure-functions
-azure-ai-formrecognizer==3.2.1
+azure-ai-documentintelligence
