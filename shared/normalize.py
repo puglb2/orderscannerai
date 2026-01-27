@@ -1,12 +1,28 @@
-from shared.doc_intelligence import analyze_document
+import re
 
-def extract_medical_facts(document_base64: str):
-    raw_text = analyze_document(document_base64)
+def normalize_medical_facts(text: str) -> dict:
+    text_lower = text.lower()
+
+    conditions = []
+    medications = []
+
+    # Very simple starters (we can expand later)
+    if "diabetes" in text_lower:
+        conditions.append("Diabetes Mellitus")
+
+    if "hypertension" in text_lower or "htn" in text_lower:
+        conditions.append("Hypertension")
+
+    if "asthma" in text_lower:
+        conditions.append("Asthma")
+
+    if "metformin" in text_lower:
+        medications.append("Metformin")
+
+    if "insulin" in text_lower:
+        medications.append("Insulin")
 
     return {
-        "raw_text": raw_text,
-        "conditions": [],
-        "medications": [],
-        "labs": [],
-        "meta": {}
+        "conditions": list(set(conditions)),
+        "medications": list(set(medications))
     }
