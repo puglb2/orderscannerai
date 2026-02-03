@@ -23,6 +23,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 mimetype="application/json"
             )
 
+        from shared.llm_extract import extract_medical_facts
+        
         text = analyze_document(document_base64)
         facts = normalize_medical_facts(text)
         rule_zero = apply_rule_zero(facts)
