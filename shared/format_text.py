@@ -1,93 +1,81 @@
-def format_underwriting_text(facts, score_result):
-    lines = []
+import os
+import json
+import requests
 
-    score = score_result.get("score", 0)
-    breakdown = score_result.get("breakdown", [])
 
-    # -------------------------
-    # Header
-    # -------------------------
-    lines.append("UNDERWRITING SUMMARY")
-    lines.append("--------------------")
-    lines.append(f"Overall insurability risk score: {score} / 10.")
-    lines.append("")
+def _require_env(name: str) -> str:
+    v = os.getenv(name)
+    if not v:
+        raise ValueError(f"Missing env var: {name}")
+    return v
 
-    # -------------------------
-    # Clinical interpretation (non-AI, rule-based)
-    # -------------------------
-    if score <= 2:
-        lines.append("This record reflects low underwriting risk.")
-    elif score <= 4:
-        lines.append("This record reflects low-to-moderate underwriting risk.")
-    elif score <= 6:
-        lines.append("This record reflects moderate underwriting risk.")
-    elif score <= 8:
-        lines.append("This record reflects elevated underwriting risk.")
-    else:
-        lines.append("This record reflects very high underwriting risk and may be uninsurable.")
 
-    lines.append("")
+def _azure_openai_chat(messages, temperature=0.2, max_tokens=450) -> str:
+    """
+    Calls Azure OpenAI Chat Completions (works for most deployments).
+    Env vars expected:
+      OPENAI_ENDPOINT      e.g. https://<resource-name>.openai.azure.com
+      OPENAI_API_KEY
+      OPENAI_DEPLOYMENT    e.g. gpt-4.1-mini (your deployment name)
+      OPENAI_API_VERSION   optional; default 2024-02-15-preview
+    """
+    endpoint = _require_env("OPENAI_ENDPOINT").rstrip("/")
+    api_key = _require_env("OPENAI_API_KEY")
+    deployment = _require_env("OPENAI_DEPLOYMENT")
+    api_version = os.getenv("OPENAI_API_VERSION", "2024-02-15-preview")
 
-    # -------------------------
-    # Conditions summary
-    # -------------------------
-    conditions = facts.get("conditions", {})
-    diabetes_type = conditions.get("diabetes_type")
+    url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+    headers = {
+        "Content-Type": "application/json",
+        "api-key": api_key
+    }
+    payload = {
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens
+    }
 
-    if diabetes_type in ("type1", "type2"):
-        lines.append(f"- {diabetes_type.replace('type', 'Type ')} diabetes identified.")
-    if conditions.get("active_cancer"):
-        lines.append("- Active cancer is present.")
-    if conditions.get("asthma"):
-        lines.append("- History of asthma.")
-    if conditions.get("arthritis"):
-        lines.append("- History of arthritis.")
+    r = requests.post(url, headers=headers, json=payload, timeout=45)
+    r.raise_for_status()
+    data = r.json()
+    return data["choices"][0]["message"]["content"]
 
-    # -------------------------
-    # Vascular history
-    # -------------------------
-    macro = facts.get("macrovascular", {})
-    if macro.get("stroke"):
-        lines.append("- Prior cerebrovascular accident (stroke) documented.")
-    elif macro.get("tia"):
-        lines.append("- Prior transient ischemic attack documented.")
 
-    if macro.get("cad_mi"):
-        lines.append("- History of coronary artery disease or myocardial infarction.")
-    if macro.get("pvd"):
-        lines.append("- Peripheral vascular disease documented.")
+def format_underwriting_text_llm(facts: dict, score_result: dict) -> str:
+    """
+    Generates a human-readable underwriting narrative using the LLM,
+    but ONLY from extracted facts + score (no raw OCR text).
+    """
 
-    # -------------------------
-    # Diabetes control
-    # -------------------------
-    diab = facts.get("diabetes_control", {})
-    if isinstance(diab.get("a1c"), (int, float)):
-        lines.append(f"- Most recent A1c reported at {diab['a1c']}.")
-    if diab.get("insulin_pump_or_cgm"):
-        lines.append("- Uses insulin pump or continuous glucose monitoring.")
-    if diab.get("dka_hospitalization"):
-        lines.append("- History of diabetic ketoacidosis hospitalization.")
+    # Minimize + stabilize the input
+    compact = {
+        "facts": facts,
+        "score": score_result.get("score"),
+        "breakdown": score_result.get("breakdown", [])
+    }
 
-    # -------------------------
-    # Complications
-    # -------------------------
-    micro = facts.get("microvascular", {})
-    if micro.get("neuropathy"):
-        lines.append("- Diabetic neuropathy present.")
-    if micro.get("retinopathy_stage") in ("non_proliferative", "proliferative"):
-        stage = micro["retinopathy_stage"].replace("_", " ")
-        lines.append(f"- Diabetic retinopathy ({stage}).")
-    if isinstance(micro.get("ckd_stage"), (int, float)):
-        lines.append(f"- Chronic kidney disease stage {micro['ckd_stage']}.")
+    system = (
+        "You are an underwriting assistant writing a concise narrative summary.\n"
+        "Rules:\n"
+        "1) Use ONLY the provided JSON. Do NOT add new facts.\n"
+        "2) Do NOT change the score.\n"
+        "3) If a field is null/unknown, say it is not available (do not guess).\n"
+        "4) Keep it professional, 6-12 sentences max.\n"
+        "5) Focus on the main drivers (stroke/TIA, DKA, retinopathy, CKD, CAD/MI, med burden, etc.)."
+    )
 
-    # -------------------------
-    # Score drivers
-    # -------------------------
-    lines.append("")
-    lines.append("Key underwriting drivers:")
-    for item in breakdown:
-        pts = item["points"]
-        sign = "+" if pts > 0 else ""
-        lines.append(f"- {item['item']} ({sign}{pts})")
+    user = (
+        "Write an underwriting narrative based ONLY on this JSON:\n\n"
+        f"{json.dumps(compact, indent=2)}"
+    )
 
-    return "\n".join(lines)
+    text = _azure_openai_chat(
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user}
+        ],
+        temperature=0.2,
+        max_tokens=450
+    )
+
+    return text.strip()
