@@ -57,14 +57,15 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json"
         )
 
-    except Exception as e:
-        # Hard error surface — no silent failures
-        return func.HttpResponse(
-            json.dumps({
-                "status": "error",
-                "type": type(e).__name__,
-                "message": str(e)
-            }),
-            status_code=500,
-            mimetype="application/json"
-        )
+except Exception as e:
+    import traceback
+    return func.HttpResponse(
+        json.dumps({
+            "status": "error",
+            "type": type(e).__name__,
+            "message": str(e),
+            "trace": traceback.format_exc()
+        }, indent=2),
+        status_code=500,
+        mimetype="application/json"
+    )
