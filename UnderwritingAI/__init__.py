@@ -1,71 +1,24 @@
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
 import json
 import azure.functions as func
-
-from shared.doc_intelligence import analyze_document
-from shared.llm_extract import extract_medical_facts
-from shared.scoring_v1 import compute_underwriting_score_v1
 
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     try:
         body = req.get_json()
-        mode = body.get("mode", "both")
-        document_base64 = body.get("documentBase64")
-
-        if not document_base64:
-            return func.HttpResponse(
-                json.dumps({ "error": "documentBase64 required" }),
-                status_code=400,
-                mimetype="application/json"
-            )
-
-        # -------------------------
-        # STEP 1 — OCR
-        # -------------------------
-        ocr_text = analyze_document(document_base64)
-
-        # -------------------------
-        # STEP 2 — LLM EXTRACTION
-        # -------------------------
-        facts = extract_medical_facts(ocr_text)
-
-        # -------------------------
-        # STEP 3 — SCORING (RULE 1–6)
-        # -------------------------
-        score_result = compute_underwriting_score_v1(facts)
-
-        # -------------------------
-        # STEP 4 — RESPONSE MODES
-        # -------------------------
-        response = {
-            "status": "ok",
-            "mode": mode
-        }
-
-        if mode in ("summary", "both"):
-            response["summary"] = facts
-
-        if mode in ("score", "both"):
-            response["insurability"] = score_result
-
         return func.HttpResponse(
-            json.dumps(response, indent=2),
+            json.dumps({
+                "status": "BOOT_OK",
+                "received_keys": list(body.keys())
+            }, indent=2),
             mimetype="application/json"
         )
-
-except Exception as e:
-    import traceback
-    return func.HttpResponse(
-        json.dumps({
-            "status": "error",
-            "type": type(e).__name__,
-            "message": str(e),
-            "trace": traceback.format_exc()
-        }, indent=2),
-        status_code=500,
-        mimetype="application/json"
-    )
+    except Exception as e:
+        return func.HttpResponse(
+            json.dumps({
+                "status": "ERROR",
+                "type": type(e).__name__,
+                "message": str(e)
+            }, indent=2),
+            status_code=500,
+            mimetype="application/json"
+        )
