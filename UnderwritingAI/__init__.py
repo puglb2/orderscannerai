@@ -5,26 +5,24 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 import json
 import azure.functions as func
 
-from shared.doc_intelligence import analyze_document
-from shared.llm_extract import extract_medical_facts
-import shared.scoring_v1  # IMPORT ONLY — do not call
-
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     try:
-        body = req.get_json()
-        document_base64 = body.get("documentBase64")
+        # Show filesystem contents at runtime
+        root = os.path.dirname(os.path.dirname(__file__))
+        shared_path = os.path.join(root, "shared")
 
-        if not document_base64:
-            raise ValueError("documentBase64 missing")
-
-        ocr_text = analyze_document(document_base64)
-        facts = extract_medical_facts(ocr_text)
+        files = {}
+        if os.path.exists(shared_path):
+            files["shared"] = os.listdir(shared_path)
+        else:
+            files["shared"] = "NOT FOUND"
 
         return func.HttpResponse(
             json.dumps({
-                "status": "SCORING_IMPORT_OK",
-                "facts_keys": list(facts.keys())
+                "status": "FS_CHECK",
+                "root": root,
+                "files": files
             }, indent=2),
             mimetype="application/json"
         )
