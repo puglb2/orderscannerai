@@ -8,75 +8,74 @@ import azure.functions as func
 from shared.doc_intelligence import analyze_document
 from shared.llm_extract import extract_medical_facts
 from shared.scoring import compute_underwriting_score_v1
-from shared.format_text import format_underwriting_text_llm
+from shared.format_text import (
+    generate_record_summary_llm,
+    generate_underwriting_explanation_llm
+)
 
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     try:
         body = req.get_json()
-        mode = body.get("mode", "both")          # summary | score | both
-        output = body.get("output", "text")      # text | json
+        mode = body.get("mode", "both")
+        output = body.get("output", "text")
         document_base64 = body.get("documentBase64")
 
         if not document_base64:
             raise ValueError("documentBase64 missing")
 
         if mode not in ("summary", "score", "both"):
-            raise ValueError("mode must be summary, score, or both")
+            raise ValueError("Invalid mode")
 
-        if output not in ("text", "json"):
-            raise ValueError("output must be text or json")
-
-        # 1) OCR
+        # OCR
         ocr_text = analyze_document(document_base64)
 
-        # 2) Extract facts (schema)
+        # LLM extraction
         facts = extract_medical_facts(ocr_text)
 
-        # 3) Score (rules)
+        # Scoring
         score = compute_underwriting_score_v1(facts)
 
-        # 4) LLM narrative (facts-only)
-        narrative = format_underwriting_text_llm(facts, score)
+        # Text outputs
+        summary_text = generate_record_summary_llm(facts)
+        underwriting_text = generate_underwriting_explanation_llm(facts, score)
 
-        # TEXT OUTPUT (default)
         if output == "text":
-            lines = []
+            sections = []
+
             if mode in ("summary", "both"):
-                lines.append("RECORD SUMMARY")
-                lines.append("--------------")
-                lines.append(narrative)
-                lines.append("")
+                sections.append("RECORD SUMMARY")
+                sections.append("--------------")
+                sections.append(summary_text)
 
             if mode in ("score", "both"):
-                lines.append("INSURABILITY SCORE")
-                lines.append("------------------")
-                lines.append(f"Score: {score.get('score')} / 10")
-                lines.append("")
-                lines.append("Score drivers:")
-                for item in score.get("breakdown", []):
-                    pts = item.get("points", 0)
-                    sign = "+" if pts > 0 else ""
-                    lines.append(f"- {item.get('item')} ({sign}{pts})")
+                sections.append("")
+                sections.append("INSURABILITY ASSESSMENT")
+                sections.append("------------------------")
+                sections.append(underwriting_text)
+                sections.append("")
+                sections.append(f"Final insurability score: {score['score']} / 10")
 
-            return func.HttpResponse("\n".join(lines).strip(), mimetype="text/plain")
+            return func.HttpResponse(
+                "\n".join(sections).strip(),
+                mimetype="text/plain"
+            )
 
-        # JSON OUTPUT (optional/debug)
-        response = {"status": "ok", "mode": mode}
-        if mode in ("summary", "both"):
-            response["summary"] = facts
-            response["narrative"] = narrative
-        if mode in ("score", "both"):
-            response["insurability"] = score
-        return func.HttpResponse(json.dumps(response, indent=2), mimetype="application/json")
+        # JSON (optional)
+        return func.HttpResponse(
+            json.dumps({
+                "summary": summary_text,
+                "underwriting": underwriting_text,
+                "score": score
+            }, indent=2),
+            mimetype="application/json"
+        )
 
     except Exception as e:
-        # For production, we should remove trace returns and log a redacted error id instead.
         import traceback
         return func.HttpResponse(
             json.dumps({
                 "status": "error",
-                "type": type(e).__name__,
                 "message": str(e),
                 "trace": traceback.format_exc()
             }, indent=2),
