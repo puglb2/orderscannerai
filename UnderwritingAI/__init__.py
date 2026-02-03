@@ -7,52 +7,25 @@ import azure.functions as func
 
 from shared.doc_intelligence import analyze_document
 from shared.llm_extract import extract_medical_facts
-from shared.scoring_v1 import compute_underwriting_score_v1
+import shared.scoring_v1  # IMPORT ONLY — do not call
 
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     try:
         body = req.get_json()
-        mode = body.get("mode", "both")
         document_base64 = body.get("documentBase64")
 
         if not document_base64:
             raise ValueError("documentBase64 missing")
 
-        if mode not in ("summary", "score", "both"):
-            raise ValueError("mode must be one of: summary, score, both")
-
-        # -------------------------
-        # STEP 1 — OCR
-        # -------------------------
         ocr_text = analyze_document(document_base64)
-
-        # -------------------------
-        # STEP 2 — LLM EXTRACTION
-        # -------------------------
         facts = extract_medical_facts(ocr_text)
 
-        # -------------------------
-        # STEP 3 — SCORING (RULE 1–6)
-        # -------------------------
-        score_result = compute_underwriting_score_v1(facts)
-
-        # -------------------------
-        # STEP 4 — RESPONSE MODES
-        # -------------------------
-        response = {
-            "status": "ok",
-            "mode": mode
-        }
-
-        if mode in ("summary", "both"):
-            response["summary"] = facts
-
-        if mode in ("score", "both"):
-            response["insurability"] = score_result
-
         return func.HttpResponse(
-            json.dumps(response, indent=2),
+            json.dumps({
+                "status": "SCORING_IMPORT_OK",
+                "facts_keys": list(facts.keys())
+            }, indent=2),
             mimetype="application/json"
         )
 
@@ -60,7 +33,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         import traceback
         return func.HttpResponse(
             json.dumps({
-                "status": "error",
+                "status": "ERROR",
                 "type": type(e).__name__,
                 "message": str(e),
                 "trace": traceback.format_exc()
