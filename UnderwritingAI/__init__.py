@@ -8,6 +8,7 @@ import azure.functions as func
 from shared.doc_intelligence import analyze_document
 from shared.llm_extract import extract_medical_facts
 from shared.scoring import compute_underwriting_score_v1
+from shared.format_text import format_underwriting_text
 
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
@@ -19,12 +20,29 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         if not document_base64:
             raise ValueError("documentBase64 missing")
 
-        if mode not in ("summary", "score", "both"):
-            raise ValueError("mode must be summary, score, or both")
+        if mode not in ("summary", "score", "both", "text"):
+            raise ValueError("mode must be summary, score, both, or text")
 
+        # OCR
         ocr_text = analyze_document(document_base64)
+
+        # LLM extraction
         facts = extract_medical_facts(ocr_text)
+
+        # Scoring
         score = compute_underwriting_score_v1(facts)
+
+        # Text report
+        text_report = format_underwriting_text(facts, score)
+
+        # -------------------------
+        # RESPONSE MODES
+        # -------------------------
+        if mode == "text":
+            return func.HttpResponse(
+                text_report,
+                mimetype="text/plain"
+            )
 
         response = {
             "status": "ok",
@@ -36,6 +54,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         if mode in ("score", "both"):
             response["insurability"] = score
+            response["report_text"] = text_report
 
         return func.HttpResponse(
             json.dumps(response, indent=2),
