@@ -11,7 +11,7 @@ def _require_env(name: str) -> str:
     return v
 
 
-def _azure_openai_chat(messages, temperature=0.2, max_tokens=450) -> str:
+def _azure_openai_chat(messages, temperature=0.2, max_tokens=500) -> str:
     endpoint = _require_env("OPENAI_ENDPOINT").rstrip("/")
     api_key = _require_env("OPENAI_API_KEY")
     deployment = _require_env("OPENAI_DEPLOYMENT")
@@ -22,6 +22,7 @@ def _azure_openai_chat(messages, temperature=0.2, max_tokens=450) -> str:
         "Content-Type": "application/json",
         "api-key": api_key
     }
+
     payload = {
         "messages": messages,
         "temperature": temperature,
@@ -33,25 +34,53 @@ def _azure_openai_chat(messages, temperature=0.2, max_tokens=450) -> str:
     return r.json()["choices"][0]["message"]["content"]
 
 
-def _paragraphize(text: str, sentences_per_paragraph: int = 2) -> str:
-    """
-    Converts a long single-line LLM response into readable paragraphs.
-    """
-    # Normalize whitespace
+def _paragraphize(text: str) -> str:
     text = re.sub(r"\s+", " ", text.strip())
-
-    # Split into sentences conservatively
     sentences = re.split(r"(?<=[.!?])\s+", text)
-
     paragraphs = []
-    for i in range(0, len(sentences), sentences_per_paragraph):
-        chunk = sentences[i:i + sentences_per_paragraph]
-        paragraphs.append(" ".join(chunk))
-
+    for i in range(0, len(sentences), 2):
+        paragraphs.append(" ".join(sentences[i:i+2]))
     return "\n\n".join(paragraphs)
 
 
-def format_underwriting_text_llm(facts: dict, score_result: dict) -> str:
+# ------------------------------------------------------------------
+# 1) PURE MEDICAL RECORD SUMMARY (NO SCORING, NO RISK LANGUAGE)
+# ------------------------------------------------------------------
+
+def generate_record_summary_llm(facts: dict) -> str:
+    system = (
+        "You are a clinical documentation assistant.\n"
+        "Write a neutral, factual medical record summary.\n\n"
+        "STRICT RULES:\n"
+        "- Do NOT mention underwriting, risk, points, scores, or insurability.\n"
+        "- Do NOT explain severity in financial or insurance terms.\n"
+        "- Do NOT infer or add diagnoses.\n"
+        "- If information is missing, say it is not available.\n"
+        "- Use clear, professional medical language.\n"
+        "- 1–3 short paragraphs.\n"
+    )
+
+    user = (
+        "Summarize the following extracted medical facts:\n\n"
+        f"{json.dumps(facts, indent=2)}"
+    )
+
+    text = _azure_openai_chat(
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user}
+        ],
+        temperature=0.2
+    )
+
+    return _paragraphize(text)
+
+
+# ------------------------------------------------------------------
+# 2) UNDERWRITING EXPLANATION (SCORING ONLY)
+# ------------------------------------------------------------------
+
+def generate_underwriting_explanation_llm(facts: dict, score_result: dict) -> str:
     compact = {
         "facts": facts,
         "score": score_result.get("score"),
@@ -59,28 +88,27 @@ def format_underwriting_text_llm(facts: dict, score_result: dict) -> str:
     }
 
     system = (
-        "You are an underwriting assistant writing a concise narrative summary.\n"
-        "Rules:\n"
-        "1) Use ONLY the provided JSON. Do NOT add new facts.\n"
-        "2) Do NOT change the score.\n"
-        "3) If a field is null/unknown, state it is not available.\n"
-        "4) Keep it professional and clear.\n"
-        "5) Focus on the primary underwriting drivers.\n"
-        "6) Write in complete sentences."
+        "You are an underwriting analyst.\n"
+        "Explain the insurability score based strictly on the provided data.\n\n"
+        "STRICT RULES:\n"
+        "- Do NOT add medical facts.\n"
+        "- Do NOT contradict the score.\n"
+        "- Reference score drivers explicitly.\n"
+        "- Use underwriting language.\n"
+        "- 1–3 short paragraphs.\n"
     )
 
     user = (
-        "Write an underwriting narrative based ONLY on this JSON:\n\n"
+        "Explain the underwriting assessment using this data:\n\n"
         f"{json.dumps(compact, indent=2)}"
     )
 
-    raw_text = _azure_openai_chat(
+    text = _azure_openai_chat(
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user}
         ],
-        temperature=0.2,
-        max_tokens=450
+        temperature=0.2
     )
 
-    return _paragraphize(raw_text)
+    return _paragraphize(text)
