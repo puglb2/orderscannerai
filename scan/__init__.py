@@ -1,174 +1,22 @@
-import os
-import json
-import tempfile
-import traceback
-
 import azure.functions as func
-
-
-# -----------------------
-# Clients
-# -----------------------
-
-def get_doc_client():
-    from azure.ai.documentintelligence import DocumentIntelligenceClient
-    from azure.core.credentials import AzureKeyCredential
-
-    endpoint = os.getenv("DOC_INTEL_ENDPOINT")
-    key = os.getenv("DOC_INTEL_KEY")
-
-    if not endpoint or not key:
-        raise RuntimeError("Missing Document Intelligence environment variables")
-
-    return DocumentIntelligenceClient(
-        endpoint=endpoint,
-        credential=AzureKeyCredential(key)
-    )
-
-
-def get_openai_client():
-    from openai import AzureOpenAI
-
-    endpoint = os.getenv("OPENAI_ENDPOINT")
-    key = os.getenv("OPENAI_KEY")
-
-    if not endpoint or not key:
-        raise RuntimeError("Missing Azure OpenAI environment variables")
-
-    return AzureOpenAI(
-        api_key=key,
-        azure_endpoint=endpoint,
-        api_version="2024-02-15-preview"
-    )
-
-
-# -----------------------
-# Helpers
-# -----------------------
-
-def extract_page_text(result, page_index: int) -> str:
-    page = result.pages[page_index]
-    if not page.lines:
-        return ""
-    return "\n".join(line.content for line in page.lines)
-
-
-def ask_openai_for_fields(page_number: int, page_text: str) -> dict:
-    client = get_openai_client()
-    deployment = os.getenv("OPENAI_DEPLOYMENT")
-
-    if not deployment:
-        raise RuntimeError("OPENAI_DEPLOYMENT not set")
-
-    prompt = f"""
-Return ONLY valid JSON.
-
-{{
-  "page_number": {page_number},
-  "is_order": true or false,
-  "order_type": "lab" | "imaging" | "referral" | "other",
-  "tests_or_procedures": [],
-  "icd10_codes": [],
-  "cpt_codes": [],
-  "ordering_provider": null,
-  "order_date": null,
-  "signature_present": false,
-  "notes": null,
-  "confidence": 0.0
-}}
-
-PAGE TEXT:
-{page_text}
-"""
-
-    response = client.chat.completions.create(
-        model=deployment,
-        messages=[
-            {"role": "system", "content": "Extract structured medical order data."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0
-    )
-
-    return json.loads(response.choices[0].message.content)
-
-
-# -----------------------
-# Core scanner
-# -----------------------
-
-def run_scanner(pdf_path: str) -> dict:
-    doc_client = get_doc_client()
-
-    with open(pdf_path, "rb") as f:
-        poller = doc_client.begin_analyze_document(
-            model_id="prebuilt-layout",
-            body=f
-        )
-
-    result = poller.result()
-
-    output = {
-        "orders": [],
-        "document_signature": {
-            "signature_present": False,
-            "note": "signature detection disabled for now"
-        }
-    }
-
-    for i in range(len(result.pages)):
-        page_text = extract_page_text(result, i)
-        if not page_text.strip():
-            continue
-
-        fields = ask_openai_for_fields(i + 1, page_text)
-
-        if fields.get("is_order") is True:
-            output["orders"].append(fields)
-
-    return output
-
-
-# -----------------------
-# Azure entry point
-# -----------------------
+import json
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     try:
         pdf_bytes = req.get_body()
 
-        if not pdf_bytes:
-            return func.HttpResponse(
-                json.dumps({"error": "No PDF uploaded"}),
-                status_code=400,
-                mimetype="application/json"
-            )
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp.write(pdf_bytes)
-            pdf_path = tmp.name
-
-        result = run_scanner(pdf_path)
-
         return func.HttpResponse(
-            json.dumps(result),
+            json.dumps({
+                "status": "scan function alive",
+                "bytes_received": len(pdf_bytes) if pdf_bytes else 0
+            }),
             status_code=200,
             mimetype="application/json"
         )
 
     except Exception as e:
         return func.HttpResponse(
-            json.dumps({
-                "error": str(e),
-                "traceback": traceback.format_exc(),
-                "env_check": {
-                    "OPENAI_ENDPOINT": bool(os.getenv("OPENAI_ENDPOINT")),
-                    "OPENAI_KEY": bool(os.getenv("OPENAI_KEY")),
-                    "OPENAI_DEPLOYMENT": bool(os.getenv("OPENAI_DEPLOYMENT")),
-                    "DOC_INTEL_ENDPOINT": bool(os.getenv("DOC_INTEL_ENDPOINT")),
-                    "DOC_INTEL_KEY": bool(os.getenv("DOC_INTEL_KEY"))
-                }
-            }),
+            json.dumps({"error": str(e)}),
             status_code=500,
             mimetype="application/json"
         )
