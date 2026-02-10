@@ -61,66 +61,56 @@ def extract_page_text(result, page_index: int):
 # Signature detection (LLM-based, Azure-native)
 # -----------------------
 
-def detect_signature(result):
+def detect_signature(pdf_bytes):
 
-    SIGNATURE_KEYWORDS = [
-        "signature",
-        "signed",
-        "physician signature",
-        "provider signature",
-        "authorized signature",
-        "signed by",
-        "provider sign"
-    ]
+    client = get_openai_client()
+    deployment = os.getenv("OPENAI_DEPLOYMENT")
 
-    signature_present = False
-    signature_pages = []
+    pdf_base64 = base64.b64encode(pdf_bytes).decode()
 
-    for page in result.pages:
+    prompt = """
+Determine whether this medical document contains a physician or provider signature.
 
-        page_number = page.page_number
+A signature may be:
+- handwritten cursive name
+- stylized signature scribble
+- initials used as signature
+- electronic signature block
 
-        keyword_regions = []
-        handwriting_regions = []
+Do NOT classify handwritten notes as signatures unless they clearly represent a signature.
 
-        # Collect regions
-        for line in page.lines or []:
+Respond ONLY with JSON:
 
-            text = line.content.lower()
+{
+  "signature_present": true or false
+}
+"""
 
-            polygon = line.polygon if hasattr(line, "polygon") else None
+    response = client.chat.completions.create(
+        model=deployment,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "document.pdf",
+                            "file_data": f"data:application/pdf;base64,{pdf_base64}"
+                        }
+                    }
+                ]
+            }
+        ],
+        temperature=0
+    )
 
-            if not polygon:
-                continue
-
-            # Check keyword regions
-            if any(keyword in text for keyword in SIGNATURE_KEYWORDS):
-                keyword_regions.append(polygon)
-
-            # Check handwriting regions
-            if hasattr(line, "appearance") and line.appearance:
-                if getattr(line.appearance, "style_name", None) == "handwriting":
-                    handwriting_regions.append(polygon)
-
-        # Check if handwriting is near keyword
-        for k_region in keyword_regions:
-            for h_region in handwriting_regions:
-
-                # Compare Y position (vertical proximity)
-                keyword_y = k_region[1]
-                handwriting_y = h_region[1]
-
-                if abs(keyword_y - handwriting_y) < 0.1:
-                    signature_present = True
-                    signature_pages.append(page_number)
-                    break
-
-            if signature_present:
-                break
+    result = response.choices[0].message.content.lower()
 
     return {
-        "signature_present": signature_present,
-        "pages": signature_pages
+        "signature_present": "true" in result,
+        "pages": []
     }
 
 # -----------------------
@@ -188,7 +178,7 @@ def run_scanner(pdf_bytes: bytes):
     result = poller.result()
 
     # Detect signature
-    signature_info = detect_signature(result)
+    signature_info = detect_signature(pdf_bytes)
 
     output = {
         "orders": [],
