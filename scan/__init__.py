@@ -91,53 +91,76 @@ def extract_page_images(pdf_bytes):
 # Vision signature detection
 # -----------------------
 
-def detect_signature(result):
+import fitz  # PyMuPDF
 
-    SIGNATURE_KEYWORDS = [
-        "signature",
-        "signed",
-        "physician signature",
-        "provider signature",
-        "authorized signature"
-    ]
+
+def detect_signature(pdf_bytes):
+
+    client = get_openai_client()
+
+    deployment = os.getenv("OPENAI_VISION_DEPLOYMENT")
+
+    if not deployment:
+        raise RuntimeError("OPENAI_VISION_DEPLOYMENT not set")
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
     signature_found = False
     signature_pages = []
 
-    for page in result.pages:
+    for page_index in range(len(doc)):
 
-        page_number = page.page_number
+        page = doc.load_page(page_index)
 
-        keyword_lines = []
-        handwriting_lines = []
+        pix = page.get_pixmap(dpi=200)
 
-        for line in page.lines or []:
+        img_bytes = pix.tobytes("png")
 
-            text = line.content.lower()
+        img_base64 = base64.b64encode(img_bytes).decode()
 
-            if any(keyword in text for keyword in SIGNATURE_KEYWORDS):
-                keyword_lines.append(line)
+        prompt = """
+Does this page contain a physician or provider signature?
 
-            # check handwriting flag
-            if hasattr(line, "appearance") and line.appearance:
-                if getattr(line.appearance, "style_name", "") == "handwriting":
-                    handwriting_lines.append(line)
+A signature may be:
+- cursive scribble
+- stylized signature
+- initials used as signature
+- signature block
 
-        # only classify as signature if handwriting is near signature keyword
-        for keyword_line in keyword_lines:
+Do NOT classify general handwriting as signature unless clearly intended.
 
-            keyword_polygon = keyword_line.polygon
+Respond ONLY with JSON:
 
-            for hw_line in handwriting_lines:
+{
+  "signature_present": true or false,
+  "confidence": 0.0 to 1.0
+}
+"""
 
-                hw_polygon = hw_line.polygon
+        response = client.chat.completions.create(
+            model=deployment,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{img_base64}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            temperature=0
+        )
 
-                # check vertical proximity (same area)
-                if abs(hw_polygon[1] - keyword_polygon[1]) < 0.15:
+        result = response.choices[0].message.content.lower()
 
-                    signature_found = True
-                    signature_pages.append(page_number)
-                    break
+        if "true" in result:
+            signature_found = True
+            signature_pages.append(page_index + 1)
 
     return {
         "signature_present": signature_found,
@@ -209,7 +232,7 @@ def run_scanner(pdf_bytes):
     # Extract images for vision
     page_images = extract_page_images(pdf_bytes)
 
-    signature_info = detect_signature(result)
+    signature_info = detect_signature(pdf_bytes)
 
     output = {
         "orders": [],
