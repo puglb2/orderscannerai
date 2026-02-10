@@ -1,9 +1,6 @@
 import os
 import json
-import base64
 import traceback
-import tempfile
-from io import BytesIO
 
 import azure.functions as func
 
@@ -11,8 +8,6 @@ from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.core.credentials import AzureKeyCredential
 
 from openai import AzureOpenAI
-
-from pdf2image import convert_from_bytes
 
 
 # -----------------------
@@ -49,71 +44,6 @@ def get_openai_client():
 
 
 # -----------------------
-# PDF → image conversion (in memory)
-# -----------------------
-
-def pdf_bytes_to_base64_images(pdf_bytes: bytes):
-
-    images = convert_from_bytes(pdf_bytes, dpi=200)
-
-    base64_images = []
-
-    for img in images:
-
-        buffer = BytesIO()
-        img.save(buffer, format="PNG")
-
-        base64_images.append(
-            base64.b64encode(buffer.getvalue()).decode()
-        )
-
-    return base64_images
-
-
-# -----------------------
-# Vision signature detection
-# -----------------------
-
-def detect_signature_vision(base64_image: str):
-
-    client = get_openai_client()
-    deployment = os.getenv("OPENAI_DEPLOYMENT")
-
-    prompt = """
-Determine if this medical document page contains a handwritten or drawn signature.
-
-Respond ONLY in JSON format:
-
-{
-  "signature_present": true or false
-}
-"""
-
-    response = client.chat.completions.create(
-        model=deployment,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{base64_image}"
-                        }
-                    }
-                ]
-            }
-        ],
-        temperature=0
-    )
-
-    result = response.choices[0].message.content.lower()
-
-    return "true" in result
-
-
-# -----------------------
 # OCR helpers
 # -----------------------
 
@@ -128,7 +58,69 @@ def extract_page_text(result, page_index: int):
 
 
 # -----------------------
-# ICD / order extraction
+# Signature detection (LLM-based, Azure-native)
+# -----------------------
+
+def detect_signature(result):
+
+    client = get_openai_client()
+    deployment = os.getenv("OPENAI_DEPLOYMENT")
+
+    signature_present = False
+    signature_pages = []
+
+    for i in range(len(result.pages)):
+
+        page_text = extract_page_text(result, i)
+
+        if not page_text.strip():
+            continue
+
+        prompt = f"""
+Determine if this medical document page contains a physician or provider signature.
+
+A signature may be:
+- handwritten name
+- stylized cursive name
+- initials
+- signed provider name
+- signature block with provider signing
+
+Respond ONLY with JSON:
+
+{{
+  "signature_present": true or false
+}}
+
+PAGE TEXT:
+{page_text}
+"""
+
+        response = client.chat.completions.create(
+            model=deployment,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0
+        )
+
+        content = response.choices[0].message.content.lower()
+
+        if "true" in content:
+            signature_present = True
+            signature_pages.append(i + 1)
+
+    return {
+        "signature_present": signature_present,
+        "pages": signature_pages
+    }
+
+
+# -----------------------
+# Order extraction
 # -----------------------
 
 def ask_openai_for_fields(page_number: int, page_text: str):
@@ -183,7 +175,7 @@ def run_scanner(pdf_bytes: bytes):
 
     doc_client = get_doc_client()
 
-    # OCR analysis
+    # OCR / layout analysis
     poller = doc_client.begin_analyze_document(
         model_id="prebuilt-layout",
         body=pdf_bytes
@@ -191,25 +183,15 @@ def run_scanner(pdf_bytes: bytes):
 
     result = poller.result()
 
-    # Vision signature detection
-    base64_images = pdf_bytes_to_base64_images(pdf_bytes)
-
-    signature_present = False
-
-    for img in base64_images:
-
-        if detect_signature_vision(img):
-            signature_present = True
-            break
+    # Detect signature
+    signature_info = detect_signature(result)
 
     output = {
         "orders": [],
-        "document_signature": {
-            "signature_present": signature_present
-        }
+        "document_signature": signature_info
     }
 
-    # Extract order data
+    # Extract orders and ICD codes
     for i in range(len(result.pages)):
 
         page_text = extract_page_text(result, i)
@@ -221,7 +203,7 @@ def run_scanner(pdf_bytes: bytes):
 
         if fields.get("is_order"):
 
-            fields["signature_present"] = signature_present
+            fields["signature_present"] = signature_info["signature_present"]
 
             output["orders"].append(fields)
 
@@ -258,7 +240,14 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(
             json.dumps({
                 "error": str(e),
-                "traceback": traceback.format_exc()
+                "traceback": traceback.format_exc(),
+                "env_check": {
+                    "OPENAI_ENDPOINT": bool(os.getenv("OPENAI_ENDPOINT")),
+                    "OPENAI_KEY": bool(os.getenv("OPENAI_KEY")),
+                    "OPENAI_DEPLOYMENT": bool(os.getenv("OPENAI_DEPLOYMENT")),
+                    "DOC_INTEL_ENDPOINT": bool(os.getenv("DOC_INTEL_ENDPOINT")),
+                    "DOC_INTEL_KEY": bool(os.getenv("DOC_INTEL_KEY"))
+                }
             }),
             status_code=500,
             mimetype="application/json"
