@@ -63,42 +63,60 @@ def extract_page_text(result, page_index: int):
 
 def detect_signature(result):
 
-    signature_present = False
-    signature_pages = []
-
     SIGNATURE_KEYWORDS = [
         "signature",
         "signed",
         "physician signature",
         "provider signature",
-        "authorized signature"
+        "authorized signature",
+        "signed by",
+        "provider sign"
     ]
+
+    signature_present = False
+    signature_pages = []
 
     for page in result.pages:
 
         page_number = page.page_number
 
-        keyword_found = False
-        handwriting_found = False
+        keyword_regions = []
+        handwriting_regions = []
 
+        # Collect regions
         for line in page.lines or []:
 
             text = line.content.lower()
 
-            # Check for signature keywords
-            if any(keyword in text for keyword in SIGNATURE_KEYWORDS):
-                keyword_found = True
+            polygon = line.polygon if hasattr(line, "polygon") else None
 
-            # Check if handwriting detected
+            if not polygon:
+                continue
+
+            # Check keyword regions
+            if any(keyword in text for keyword in SIGNATURE_KEYWORDS):
+                keyword_regions.append(polygon)
+
+            # Check handwriting regions
             if hasattr(line, "appearance") and line.appearance:
                 if getattr(line.appearance, "style_name", None) == "handwriting":
-                    handwriting_found = True
+                    handwriting_regions.append(polygon)
 
-        # Signature exists if handwriting exists OR signature keyword exists
-        if handwriting_found or keyword_found:
+        # Check if handwriting is near keyword
+        for k_region in keyword_regions:
+            for h_region in handwriting_regions:
 
-            signature_present = True
-            signature_pages.append(page_number)
+                # Compare Y position (vertical proximity)
+                keyword_y = k_region[1]
+                handwriting_y = h_region[1]
+
+                if abs(keyword_y - handwriting_y) < 0.1:
+                    signature_present = True
+                    signature_pages.append(page_number)
+                    break
+
+            if signature_present:
+                break
 
     return {
         "signature_present": signature_present,
