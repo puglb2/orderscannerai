@@ -10,6 +10,8 @@ from azure.core.credentials import AzureKeyCredential
 
 from openai import AzureOpenAI
 
+import fitz  # PyMuPDF
+
 
 # -----------------------
 # Clients
@@ -21,7 +23,7 @@ def get_doc_client():
     key = os.getenv("DOC_INTEL_KEY")
 
     if not endpoint or not key:
-        raise RuntimeError("Missing DOC_INTEL environment variables")
+        raise RuntimeError("Missing Document Intelligence environment variables")
 
     return DocumentIntelligenceClient(
         endpoint=endpoint,
@@ -35,7 +37,7 @@ def get_openai_client():
     key = os.getenv("OPENAI_KEY")
 
     if not endpoint or not key:
-        raise RuntimeError("Missing OPENAI environment variables")
+        raise RuntimeError("Missing Azure OpenAI environment variables")
 
     return AzureOpenAI(
         api_key=key,
@@ -59,40 +61,8 @@ def extract_page_text(result, page_index):
 
 
 # -----------------------
-# Render pages as images via Document Intelligence
-# -----------------------
-
-def extract_page_images(pdf_bytes):
-
-    doc_client = get_doc_client()
-
-    poller = doc_client.begin_analyze_document(
-        model_id="prebuilt-layout",
-        body=pdf_bytes,
-        output=["figures"]
-    )
-
-    result = poller.result()
-
-    images = []
-
-    if hasattr(result, "figures") and result.figures:
-
-        for fig in result.figures:
-
-            if hasattr(fig, "image") and fig.image:
-
-                images.append(fig.image)
-
-    return images
-
-
-# -----------------------
 # Vision signature detection
 # -----------------------
-
-import fitz  # PyMuPDF
-
 
 def detect_signature(pdf_bytes):
 
@@ -121,13 +91,13 @@ def detect_signature(pdf_bytes):
         prompt = """
 Does this page contain a physician or provider signature?
 
-A signature may be:
-- cursive scribble
-- stylized signature
-- initials used as signature
+A signature includes:
+- cursive signature
+- stylized scribble
 - signature block
+- electronic signature
 
-Do NOT classify general handwriting as signature unless clearly intended.
+Do NOT classify general handwriting as signature.
 
 Respond ONLY with JSON:
 
@@ -156,9 +126,10 @@ Respond ONLY with JSON:
             temperature=0
         )
 
-        result = response.choices[0].message.content.lower()
+        content = response.choices[0].message.content.lower()
 
-        if "true" in result:
+        if "true" in content:
+
             signature_found = True
             signature_pages.append(page_index + 1)
 
@@ -229,9 +200,6 @@ def run_scanner(pdf_bytes):
 
     result = poller.result()
 
-    # Extract images for vision
-    page_images = extract_page_images(pdf_bytes)
-
     signature_info = detect_signature(pdf_bytes)
 
     output = {
@@ -248,11 +216,47 @@ def run_scanner(pdf_bytes):
 
         fields = ask_openai_for_fields(i + 1, page_text)
 
-        if fields.get("is_order"):
+        is_order = fields.get("is_order", False)
 
-            fields["signature_present"] = signature_info["signature_present"]
+        has_medical_indicators = (
+            fields.get("icd10_codes") or
+            fields.get("tests_or_procedures") or
+            fields.get("order_type")
+        )
+
+        if is_order or has_medical_indicators:
+
+            if not fields.get("icd10_codes"):
+                fields["icd10_codes"] = []
+
+            fields["signature_present"] = signature_info.get("signature_present", False)
+
+            fields["icd_status"] = (
+                "found" if fields["icd10_codes"] else "not_found"
+            )
+
+            fields["signature_status"] = (
+                "found" if fields["signature_present"] else "not_detected"
+            )
 
             output["orders"].append(fields)
+
+    # fallback if nothing detected
+    if not output["orders"]:
+
+        output["orders"].append({
+            "page_number": 1,
+            "is_order": False,
+            "order_type": "unknown",
+            "tests_or_procedures": [],
+            "icd10_codes": [],
+            "signature_present": signature_info.get("signature_present", False),
+            "icd_status": "not_found",
+            "signature_status": (
+                "found" if signature_info.get("signature_present") else "not_detected"
+            ),
+            "notes": "No ICD codes detected."
+        })
 
     return output
 
