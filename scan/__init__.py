@@ -181,7 +181,7 @@ def run_scanner(pdf_bytes: bytes):
 
     # OCR / layout analysis
     poller = doc_client.begin_analyze_document(
-        model_id="prebuilt-document",
+        model_id="prebuilt-layout",
         body=pdf_bytes
     )
 
