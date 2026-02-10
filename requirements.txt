@@ -2,5 +2,3 @@ azure-functions
 requests
 azure-ai-documentintelligence>=1.0.0b3
 openai>=1.0.0
-pdf2image
-pillow
