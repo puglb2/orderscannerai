@@ -63,61 +63,47 @@ def extract_page_text(result, page_index: int):
 
 def detect_signature(result):
 
-    client = get_openai_client()
-    deployment = os.getenv("OPENAI_DEPLOYMENT")
-
     signature_present = False
     signature_pages = []
 
-    for i in range(len(result.pages)):
+    SIGNATURE_KEYWORDS = [
+        "signature",
+        "signed",
+        "physician signature",
+        "provider signature",
+        "authorized signature"
+    ]
 
-        page_text = extract_page_text(result, i)
+    for page in result.pages:
 
-        if not page_text.strip():
-            continue
+        page_number = page.page_number
 
-        prompt = f"""
-Determine if this medical document page contains a physician or provider signature.
+        keyword_found = False
+        handwriting_found = False
 
-A signature may be:
-- handwritten name
-- stylized cursive name
-- initials
-- signed provider name
-- signature block with provider signing
+        for line in page.lines or []:
 
-Respond ONLY with JSON:
+            text = line.content.lower()
 
-{{
-  "signature_present": true or false
-}}
+            # Check for signature keywords
+            if any(keyword in text for keyword in SIGNATURE_KEYWORDS):
+                keyword_found = True
 
-PAGE TEXT:
-{page_text}
-"""
+            # Check if handwriting detected
+            if hasattr(line, "appearance") and line.appearance:
+                if getattr(line.appearance, "style_name", None) == "handwriting":
+                    handwriting_found = True
 
-        response = client.chat.completions.create(
-            model=deployment,
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            temperature=0
-        )
+        # Signature exists if handwriting exists OR signature keyword exists
+        if handwriting_found or keyword_found:
 
-        content = response.choices[0].message.content.lower()
-
-        if "true" in content:
             signature_present = True
-            signature_pages.append(i + 1)
+            signature_pages.append(page_number)
 
     return {
         "signature_present": signature_present,
         "pages": signature_pages
     }
-
 
 # -----------------------
 # Order extraction
@@ -177,7 +163,7 @@ def run_scanner(pdf_bytes: bytes):
 
     # OCR / layout analysis
     poller = doc_client.begin_analyze_document(
-        model_id="prebuilt-layout",
+        model_id="prebuilt-document",
         body=pdf_bytes
     )
 
