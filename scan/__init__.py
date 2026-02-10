@@ -1,7 +1,7 @@
 import os
 import json
 import traceback
-
+import base64
 import azure.functions as func
 
 from azure.ai.documentintelligence import DocumentIntelligenceClient
