@@ -91,51 +91,57 @@ def extract_page_images(pdf_bytes):
 # Vision signature detection
 # -----------------------
 
-def detect_signature_vision(page_images):
+def detect_signature(result):
 
-    client = get_openai_client()
-
-    deployment = os.getenv("OPENAI_VISION_DEPLOYMENT")
-
-    if not deployment:
-        raise RuntimeError("OPENAI_VISION_DEPLOYMENT not set")
+    SIGNATURE_KEYWORDS = [
+        "signature",
+        "signed",
+        "physician signature",
+        "provider signature",
+        "authorized signature"
+    ]
 
     signature_found = False
+    signature_pages = []
 
-    for img_bytes in page_images:
+    for page in result.pages:
 
-        img_base64 = base64.b64encode(img_bytes).decode()
+        page_number = page.page_number
 
-        response = client.chat.completions.create(
-            model=deployment,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Does this page contain a physician signature? Respond ONLY with JSON: {\"signature_present\": true or false}"
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{img_base64}"
-                            }
-                        }
-                    ]
-                }
-            ],
-            temperature=0
-        )
+        keyword_lines = []
+        handwriting_lines = []
 
-        content = response.choices[0].message.content.lower()
+        for line in page.lines or []:
 
-        if "true" in content:
-            signature_found = True
-            break
+            text = line.content.lower()
+
+            if any(keyword in text for keyword in SIGNATURE_KEYWORDS):
+                keyword_lines.append(line)
+
+            # check handwriting flag
+            if hasattr(line, "appearance") and line.appearance:
+                if getattr(line.appearance, "style_name", "") == "handwriting":
+                    handwriting_lines.append(line)
+
+        # only classify as signature if handwriting is near signature keyword
+        for keyword_line in keyword_lines:
+
+            keyword_polygon = keyword_line.polygon
+
+            for hw_line in handwriting_lines:
+
+                hw_polygon = hw_line.polygon
+
+                # check vertical proximity (same area)
+                if abs(hw_polygon[1] - keyword_polygon[1]) < 0.15:
+
+                    signature_found = True
+                    signature_pages.append(page_number)
+                    break
 
     return {
-        "signature_present": signature_found
+        "signature_present": signature_found,
+        "pages": signature_pages
     }
 
 
@@ -203,7 +209,7 @@ def run_scanner(pdf_bytes):
     # Extract images for vision
     page_images = extract_page_images(pdf_bytes)
 
-    signature_info = detect_signature_vision(page_images)
+    signature_info = detect_signature(result)
 
     output = {
         "orders": [],
