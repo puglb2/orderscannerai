@@ -21,7 +21,7 @@ def get_doc_client():
     key = os.getenv("DOC_INTEL_KEY")
 
     if not endpoint or not key:
-        raise RuntimeError("Missing Document Intelligence environment variables")
+        raise RuntimeError("Missing DOC_INTEL environment variables")
 
     return DocumentIntelligenceClient(
         endpoint=endpoint,
@@ -35,7 +35,7 @@ def get_openai_client():
     key = os.getenv("OPENAI_KEY")
 
     if not endpoint or not key:
-        raise RuntimeError("Missing Azure OpenAI environment variables")
+        raise RuntimeError("Missing OPENAI environment variables")
 
     return AzureOpenAI(
         api_key=key,
@@ -48,7 +48,7 @@ def get_openai_client():
 # OCR helper
 # -----------------------
 
-def extract_page_text(result, page_index: int):
+def extract_page_text(result, page_index):
 
     page = result.pages[page_index]
 
@@ -59,10 +59,39 @@ def extract_page_text(result, page_index: int):
 
 
 # -----------------------
+# Render pages as images via Document Intelligence
+# -----------------------
+
+def extract_page_images(pdf_bytes):
+
+    doc_client = get_doc_client()
+
+    poller = doc_client.begin_analyze_document(
+        model_id="prebuilt-layout",
+        body=pdf_bytes,
+        output=["figures"]
+    )
+
+    result = poller.result()
+
+    images = []
+
+    if hasattr(result, "figures") and result.figures:
+
+        for fig in result.figures:
+
+            if hasattr(fig, "image") and fig.image:
+
+                images.append(fig.image)
+
+    return images
+
+
+# -----------------------
 # Vision signature detection
 # -----------------------
 
-def detect_signature_vision(pdf_bytes):
+def detect_signature_vision(page_images):
 
     client = get_openai_client()
 
@@ -71,76 +100,54 @@ def detect_signature_vision(pdf_bytes):
     if not deployment:
         raise RuntimeError("OPENAI_VISION_DEPLOYMENT not set")
 
-    pdf_base64 = base64.b64encode(pdf_bytes).decode()
+    signature_found = False
 
-    prompt = """
-Determine whether this medical document contains a physician or provider signature.
+    for img_bytes in page_images:
 
-A valid signature includes:
-- handwritten cursive name
-- stylized signature scribble
-- provider signature block
-- electronic signature
+        img_base64 = base64.b64encode(img_bytes).decode()
 
-Do NOT classify handwritten notes as signatures unless clearly intended as one.
-
-Respond ONLY in JSON format:
-
-{
-  "signature_present": true or false,
-  "confidence": 0.0 to 1.0
-}
-"""
-
-    response = client.chat.completions.create(
-        model=deployment,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": prompt
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:application/pdf;base64,{pdf_base64}"
+        response = client.chat.completions.create(
+            model=deployment,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Does this page contain a physician signature? Respond ONLY with JSON: {\"signature_present\": true or false}"
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{img_base64}"
+                            }
                         }
-                    }
-                ]
-            }
-        ],
-        temperature=0
-    )
+                    ]
+                }
+            ],
+            temperature=0
+        )
 
-    content = response.choices[0].message.content
+        content = response.choices[0].message.content.lower()
 
-    try:
-        parsed = json.loads(content)
-        return {
-            "signature_present": bool(parsed.get("signature_present", False)),
-            "confidence": float(parsed.get("confidence", 0))
-        }
-    except:
-        return {
-            "signature_present": "true" in content.lower(),
-            "confidence": 0.5
-        }
+        if "true" in content:
+            signature_found = True
+            break
+
+    return {
+        "signature_present": signature_found
+    }
 
 
 # -----------------------
 # Order extraction
 # -----------------------
 
-def ask_openai_for_fields(page_number: int, page_text: str):
+def ask_openai_for_fields(page_number, page_text):
 
     client = get_openai_client()
 
     deployment = os.getenv("OPENAI_DEPLOYMENT")
-
-    if not deployment:
-        raise RuntimeError("OPENAI_DEPLOYMENT not set")
 
     prompt = f"""
 Return ONLY valid JSON.
@@ -151,11 +158,8 @@ Return ONLY valid JSON.
   "order_type": "lab" | "imaging" | "referral" | "other",
   "tests_or_procedures": [],
   "icd10_codes": [],
-  "cpt_codes": [],
   "ordering_provider": null,
   "order_date": null,
-  "signature_present": false,
-  "notes": null,
   "confidence": 0.0
 }}
 
@@ -185,11 +189,10 @@ PAGE TEXT:
 # Core scanner
 # -----------------------
 
-def run_scanner(pdf_bytes: bytes):
+def run_scanner(pdf_bytes):
 
     doc_client = get_doc_client()
 
-    # OCR
     poller = doc_client.begin_analyze_document(
         model_id="prebuilt-layout",
         body=pdf_bytes
@@ -197,15 +200,16 @@ def run_scanner(pdf_bytes: bytes):
 
     result = poller.result()
 
-    # Vision signature detection
-    signature_info = detect_signature_vision(pdf_bytes)
+    # Extract images for vision
+    page_images = extract_page_images(pdf_bytes)
+
+    signature_info = detect_signature_vision(page_images)
 
     output = {
         "orders": [],
         "document_signature": signature_info
     }
 
-    # Extract orders and ICD codes
     for i in range(len(result.pages)):
 
         page_text = extract_page_text(result, i)
@@ -228,13 +232,14 @@ def run_scanner(pdf_bytes: bytes):
 # Azure entry point
 # -----------------------
 
-def main(req: func.HttpRequest) -> func.HttpResponse:
+def main(req):
 
     try:
 
         pdf_bytes = req.get_body()
 
         if not pdf_bytes:
+
             return func.HttpResponse(
                 json.dumps({"error": "No PDF uploaded"}),
                 status_code=400,
@@ -254,13 +259,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(
             json.dumps({
                 "error": str(e),
-                "traceback": traceback.format_exc(),
-                "env_check": {
-                    "OPENAI_DEPLOYMENT": bool(os.getenv("OPENAI_DEPLOYMENT")),
-                    "OPENAI_VISION_DEPLOYMENT": bool(os.getenv("OPENAI_VISION_DEPLOYMENT")),
-                    "DOC_INTEL_ENDPOINT": bool(os.getenv("DOC_INTEL_ENDPOINT")),
-                    "DOC_INTEL_KEY": bool(os.getenv("DOC_INTEL_KEY"))
-                }
+                "traceback": traceback.format_exc()
             }),
             status_code=500,
             mimetype="application/json"
