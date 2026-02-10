@@ -2,6 +2,7 @@ import os
 import json
 import traceback
 import base64
+
 import azure.functions as func
 
 from azure.ai.documentintelligence import DocumentIntelligenceClient
@@ -44,7 +45,7 @@ def get_openai_client():
 
 
 # -----------------------
-# OCR helpers
+# OCR helper
 # -----------------------
 
 def extract_page_text(result, page_index: int):
@@ -58,31 +59,36 @@ def extract_page_text(result, page_index: int):
 
 
 # -----------------------
-# Signature detection (LLM-based, Azure-native)
+# Vision signature detection
 # -----------------------
 
-def detect_signature(pdf_bytes):
+def detect_signature_vision(pdf_bytes):
 
     client = get_openai_client()
-    deployment = os.getenv("OPENAI_DEPLOYMENT")
+
+    deployment = os.getenv("OPENAI_VISION_DEPLOYMENT")
+
+    if not deployment:
+        raise RuntimeError("OPENAI_VISION_DEPLOYMENT not set")
 
     pdf_base64 = base64.b64encode(pdf_bytes).decode()
 
     prompt = """
 Determine whether this medical document contains a physician or provider signature.
 
-A signature may be:
+A valid signature includes:
 - handwritten cursive name
 - stylized signature scribble
-- initials used as signature
-- electronic signature block
+- provider signature block
+- electronic signature
 
-Do NOT classify handwritten notes as signatures unless they clearly represent a signature.
+Do NOT classify handwritten notes as signatures unless clearly intended as one.
 
-Respond ONLY with JSON:
+Respond ONLY in JSON format:
 
 {
-  "signature_present": true or false
+  "signature_present": true or false,
+  "confidence": 0.0 to 1.0
 }
 """
 
@@ -92,12 +98,14 @@ Respond ONLY with JSON:
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
                     {
-                        "type": "file",
-                        "file": {
-                            "filename": "document.pdf",
-                            "file_data": f"data:application/pdf;base64,{pdf_base64}"
+                        "type": "text",
+                        "text": prompt
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:application/pdf;base64,{pdf_base64}"
                         }
                     }
                 ]
@@ -106,12 +114,20 @@ Respond ONLY with JSON:
         temperature=0
     )
 
-    result = response.choices[0].message.content.lower()
+    content = response.choices[0].message.content
 
-    return {
-        "signature_present": "true" in result,
-        "pages": []
-    }
+    try:
+        parsed = json.loads(content)
+        return {
+            "signature_present": bool(parsed.get("signature_present", False)),
+            "confidence": float(parsed.get("confidence", 0))
+        }
+    except:
+        return {
+            "signature_present": "true" in content.lower(),
+            "confidence": 0.5
+        }
+
 
 # -----------------------
 # Order extraction
@@ -120,7 +136,11 @@ Respond ONLY with JSON:
 def ask_openai_for_fields(page_number: int, page_text: str):
 
     client = get_openai_client()
+
     deployment = os.getenv("OPENAI_DEPLOYMENT")
+
+    if not deployment:
+        raise RuntimeError("OPENAI_DEPLOYMENT not set")
 
     prompt = f"""
 Return ONLY valid JSON.
@@ -169,7 +189,7 @@ def run_scanner(pdf_bytes: bytes):
 
     doc_client = get_doc_client()
 
-    # OCR / layout analysis
+    # OCR
     poller = doc_client.begin_analyze_document(
         model_id="prebuilt-layout",
         body=pdf_bytes
@@ -177,8 +197,8 @@ def run_scanner(pdf_bytes: bytes):
 
     result = poller.result()
 
-    # Detect signature
-    signature_info = detect_signature(pdf_bytes)
+    # Vision signature detection
+    signature_info = detect_signature_vision(pdf_bytes)
 
     output = {
         "orders": [],
@@ -236,9 +256,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 "error": str(e),
                 "traceback": traceback.format_exc(),
                 "env_check": {
-                    "OPENAI_ENDPOINT": bool(os.getenv("OPENAI_ENDPOINT")),
-                    "OPENAI_KEY": bool(os.getenv("OPENAI_KEY")),
                     "OPENAI_DEPLOYMENT": bool(os.getenv("OPENAI_DEPLOYMENT")),
+                    "OPENAI_VISION_DEPLOYMENT": bool(os.getenv("OPENAI_VISION_DEPLOYMENT")),
                     "DOC_INTEL_ENDPOINT": bool(os.getenv("DOC_INTEL_ENDPOINT")),
                     "DOC_INTEL_KEY": bool(os.getenv("DOC_INTEL_KEY"))
                 }
