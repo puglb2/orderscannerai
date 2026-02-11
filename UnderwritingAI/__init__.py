@@ -1,84 +1,51 @@
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
 import json
+import traceback
 import azure.functions as func
 
 from shared.doc_intelligence import analyze_document
-from shared.llm_extract import extract_medical_facts
-from shared.scoring import compute_underwriting_score_v1
-from shared.format_text import (
-    generate_record_summary_llm,
-    generate_underwriting_explanation_llm
-)
+from shared.llm_extract import extract_structured_data
+from shared.scoring import calculate_score
+from shared.clinical_summary import generate_clinical_summary
 
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
+
     try:
-        body = req.get_json()
-        mode = body.get("mode", "both")
-        output = body.get("output", "text")
-        document_base64 = body.get("documentBase64")
 
-        if not document_base64:
-            raise ValueError("documentBase64 missing")
+        pdf_bytes = req.get_body()
 
-        if mode not in ("summary", "score", "both"):
-            raise ValueError("Invalid mode")
-
-        # OCR
-        ocr_text = analyze_document(document_base64)
-
-        # LLM extraction
-        facts = extract_medical_facts(ocr_text)
-
-        # Scoring
-        score = compute_underwriting_score_v1(facts)
-
-        # Text outputs
-        summary_text = generate_record_summary_llm(facts)
-        underwriting_text = generate_underwriting_explanation_llm(facts, score)
-
-        if output == "text":
-            sections = []
-
-            if mode in ("summary", "both"):
-                sections.append("RECORD SUMMARY")
-                sections.append("--------------")
-                sections.append(summary_text)
-
-            if mode in ("score", "both"):
-                sections.append("")
-                sections.append("INSURABILITY ASSESSMENT")
-                sections.append("------------------------")
-                sections.append(underwriting_text)
-                sections.append("")
-                sections.append(f"Final insurability score: {score['score']} / 10")
-
+        if not pdf_bytes:
             return func.HttpResponse(
-                "\n".join(sections).strip(),
-                mimetype="text/plain"
+                json.dumps({"error": "No document uploaded"}),
+                status_code=400
             )
 
-        # JSON (optional)
+        ocr_text = analyze_document(pdf_bytes)
+
+        structured = extract_structured_data(ocr_text)
+
+        score = calculate_score(structured)
+
+        clinical_summary = generate_clinical_summary(ocr_text)
+
+        response = {
+            "status": "ok",
+            "clinical_summary": clinical_summary,
+            "insurability": score
+        }
+
         return func.HttpResponse(
-            json.dumps({
-                "summary": summary_text,
-                "underwriting": underwriting_text,
-                "score": score
-            }, indent=2),
+            json.dumps(response),
+            status_code=200,
             mimetype="application/json"
         )
 
     except Exception as e:
-        import traceback
+
         return func.HttpResponse(
             json.dumps({
-                "status": "error",
-                "message": str(e),
-                "trace": traceback.format_exc()
-            }, indent=2),
-            status_code=500,
-            mimetype="application/json"
+                "error": str(e),
+                "traceback": traceback.format_exc()
+            }),
+            status_code=500
         )
