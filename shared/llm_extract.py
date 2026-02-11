@@ -1,63 +1,53 @@
-import json
 import os
-import requests
-from shared.schema_v1 import MEDICAL_FACTS_SCHEMA_V1
+import json
+from openai import AzureOpenAI
 
-SYSTEM_PROMPT = (
-    "You are a medical document extraction engine.\n"
-    "You do NOT make medical judgments.\n"
-    "You do NOT infer missing information.\n"
-    "You do NOT score risk.\n"
-    "You ONLY extract facts explicitly stated in the text.\n"
-    "If a value is not clearly present, return null or false.\n"
-    "Output MUST be valid JSON matching the schema exactly.\n"
-)
 
-def build_prompt(ocr_text: str) -> str:
-    return f"""
-Extract medical facts from the OCR text below into the JSON schema.
+def get_openai_client():
 
-Rules:
-- Do NOT infer.
-- Do NOT guess.
-- Do NOT score.
-- Use null if missing.
-- Use "unknown" only when mentioned but unclear.
-- Return ONLY JSON.
+    return AzureOpenAI(
+        api_key=os.getenv("OPENAI_KEY"),
+        azure_endpoint=os.getenv("OPENAI_ENDPOINT"),
+        api_version="2024-02-15-preview"
+    )
 
-OCR TEXT:
-<<<
+
+def extract_structured_data(ocr_text: str):
+
+    client = get_openai_client()
+
+    deployment = os.getenv("OPENAI_DEPLOYMENT")
+
+    prompt = f"""
+Extract structured underwriting-relevant medical data.
+
+Return ONLY valid JSON:
+
+{
+  "conditions": {
+    "diabetes_type": null,
+    "asthma": false,
+    "arthritis": false,
+    "active_cancer": false
+  },
+  "medications": [],
+  "has_stroke": false,
+  "has_tia": false,
+  "has_neuropathy": false,
+  "has_retinopathy": false
+}
+
+RECORD TEXT:
 {ocr_text}
->>>
-
-JSON SCHEMA:
-<<<
-{json.dumps(MEDICAL_FACTS_SCHEMA_V1, indent=2)}
->>>
 """
 
-def extract_medical_facts(ocr_text: str) -> dict:
-    endpoint = os.environ["OPENAI_ENDPOINT"]
-    key = os.environ["OPENAI_API_KEY"]
-    deployment = os.environ["OPENAI_DEPLOYMENT"]
-
-    url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version=2024-02-15-preview"
-
-    payload = {
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": build_prompt(ocr_text)}
+    response = client.chat.completions.create(
+        model=deployment,
+        messages=[
+            {"role": "system", "content": "Extract structured medical data."},
+            {"role": "user", "content": prompt}
         ],
-        "temperature": 0
-    }
+        temperature=0
+    )
 
-    headers = {
-        "Content-Type": "application/json",
-        "api-key": key
-    }
-
-    resp = requests.post(url, headers=headers, json=payload)
-    resp.raise_for_status()
-
-    content = resp.json()["choices"][0]["message"]["content"]
-    return json.loads(content)
+    return json.loads(response.choices[0].message.content)
