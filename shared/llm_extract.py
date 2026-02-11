@@ -19,23 +19,40 @@ def extract_structured_data(ocr_text: str):
     deployment = os.getenv("OPENAI_DEPLOYMENT")
 
     prompt = f"""
-Extract structured underwriting-relevant medical data.
+You are extracting structured clinical facts from a medical record.
+
+Extract ALL clinical facts present.
+
+DO NOT limit extraction to specific diseases.
 
 Return ONLY valid JSON:
 
-{
-  "conditions": {
-    "diabetes_type": null,
-    "asthma": false,
-    "arthritis": false,
-    "active_cancer": false
-  },
-  "medications": [],
-  "has_stroke": false,
-  "has_tia": false,
-  "has_neuropathy": false,
-  "has_retinopathy": false
-}
+{{
+  "conditions": [
+    {{
+      "name": "",
+      "status": "active | history | resolved"
+    }}
+  ],
+  "medications": [
+    {{
+      "name": "",
+      "type": "medication"
+    }}
+  ],
+  "providers": [
+    {{
+      "name": "",
+      "type": "physician | clinic | hospital"
+    }}
+  ],
+  "clinical_events": [
+    {{
+      "event": "",
+      "type": "diagnosis | hospitalization | procedure"
+    }}
+  ]
+}}
 
 RECORD TEXT:
 {ocr_text}
@@ -44,7 +61,7 @@ RECORD TEXT:
     response = client.chat.completions.create(
         model=deployment,
         messages=[
-            {"role": "system", "content": "Extract structured medical data."},
+            {"role": "system", "content": "Extract clinical structured data."},
             {"role": "user", "content": prompt}
         ],
         temperature=0
