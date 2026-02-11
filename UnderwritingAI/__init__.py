@@ -4,14 +4,24 @@ import azure.functions as func
 from shared.doc_intelligence import analyze_document
 from shared.llm_extract import extract_structured_data
 from shared.scoring import calculate_score
-from shared.clinical_summary import generate_clinical_summary
+
+# IMPORTANT: import summary safely
+try:
+    from shared.clinical_summary import generate_clinical_summary
+except Exception as import_error:
+
+    def generate_clinical_summary(text):
+        return (
+            "RECORD SUMMARY\n--------------\n"
+            "Summary generation failed.\n\n"
+            f"Import error:\n{str(import_error)}"
+        )
 
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
 
     try:
 
-        # Get PDF bytes
         pdf_bytes = req.get_body()
 
         if not pdf_bytes:
@@ -20,38 +30,45 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 status_code=400
             )
 
-        # Step 1: OCR
+        # OCR
         ocr_text = analyze_document(pdf_bytes)
 
         if not ocr_text.strip():
             return func.HttpResponse(
-                "Error: No readable text found in document.",
+                "Error: No readable text found.",
                 status_code=400
             )
 
-        # Step 2: Structured extraction for scoring
+        # Structured extraction
         structured_data = extract_structured_data(ocr_text)
 
-        # Step 3: Calculate score
+        # Score
         insurability = calculate_score(structured_data)
 
-        # Step 4: Generate neutral clinical summary
-        clinical_summary = generate_clinical_summary(ocr_text)
+        # Summary (SAFE)
+        try:
+            clinical_summary = generate_clinical_summary(ocr_text)
+        except Exception as summary_error:
+            clinical_summary = (
+                "RECORD SUMMARY\n--------------\n"
+                "Summary generation failed.\n\n"
+                f"Error:\n{str(summary_error)}\n\n"
+                f"Traceback:\n{traceback.format_exc()}"
+            )
 
-        # Step 5: Build readable score section
+        # Score section
         score_text = "\n\nINSURABILITY SCORE\n------------------\n"
-        score_text += f"Score: {insurability['score']} / 10\n\n"
+        score_text += f"Score: {insurability.get('score', 'Unknown')} / 10\n\n"
 
         if insurability.get("breakdown"):
             score_text += "Contributing factors:\n"
             for item in insurability["breakdown"]:
                 score_text += f"- {item}\n"
 
-        # Final readable output
-        final_output = clinical_summary + score_text
+        output = clinical_summary + score_text
 
         return func.HttpResponse(
-            final_output,
+            output,
             status_code=200,
             mimetype="text/plain"
         )
@@ -59,9 +76,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
 
         return func.HttpResponse(
-            "Error processing document:\n\n"
+            "FULL ERROR:\n\n"
             + str(e)
-            + "\n\n"
+            + "\n\nTRACEBACK:\n\n"
             + traceback.format_exc(),
             status_code=500,
             mimetype="text/plain"
