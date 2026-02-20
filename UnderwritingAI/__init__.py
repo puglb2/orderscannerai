@@ -49,26 +49,37 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         )
 
     try:
-
         pdf_bytes = req.get_body()
 
+# DEBUG: inspect first bytes
         if not pdf_bytes:
-            return func.HttpResponse("No document uploaded.", mimetype="text/plain")
+            return func.HttpResponse("No body received.", mimetype="text/plain")
 
-        ocr_text = analyze_document(pdf_bytes)
-
-        structured = extract_structured_data(ocr_text)
-
-        score = calculate_score(structured)
-
-        summary = generate_clinical_summary(ocr_text)
+        preview = pdf_bytes[:20]
 
         return func.HttpResponse(
-            summary
-            + "\n\nScore: "
-            + str(score.get("score")),
+            f"First 20 bytes: {preview}",
             mimetype="text/plain"
-        )
+)
+#        pdf_bytes = req.get_body()
+#
+#        if not pdf_bytes:
+#            return func.HttpResponse("No document uploaded.", mimetype="text/plain")
+#
+#        ocr_text = analyze_document(pdf_bytes)
+#
+#        structured = extract_structured_data(ocr_text)
+#
+#        score = calculate_score(structured)
+#
+#        summary = generate_clinical_summary(ocr_text)
+#
+#        return func.HttpResponse(
+#            summary
+#            + "\n\nScore: "
+#            + str(score.get("score")),
+#            mimetype="text/plain"
+#        )0
 
     except Exception as e:
 
