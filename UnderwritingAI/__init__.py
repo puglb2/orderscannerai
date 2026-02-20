@@ -1,92 +1,58 @@
-import traceback
 import azure.functions as func
+import traceback
 
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
 
     try:
 
+        mode = req.form.get("mode")
+        file = req.files.get("file")
+
+        if not file:
+            return func.HttpResponse(
+                "No file uploaded.",
+                status_code=400
+            )
+
+        pdf_bytes = file.read()
+
         from shared.doc_intelligence import analyze_document
-
-    except Exception as e:
-        return func.HttpResponse(
-            "IMPORT ERROR: doc_intelligence\n\n"
-            + str(e) + "\n\n" + traceback.format_exc(),
-            mimetype="text/plain"
-        )
-
-    try:
-
         from shared.llm_extract import extract_structured_data
-
-    except Exception as e:
-        return func.HttpResponse(
-            "IMPORT ERROR: llm_extract\n\n"
-            + str(e) + "\n\n" + traceback.format_exc(),
-            mimetype="text/plain"
-        )
-
-    try:
-
         from shared.scoring import calculate_score
-
-    except Exception as e:
-        return func.HttpResponse(
-            "IMPORT ERROR: scoring\n\n"
-            + str(e) + "\n\n" + traceback.format_exc(),
-            mimetype="text/plain"
-        )
-
-    try:
-
         from shared.clinical_summary import generate_clinical_summary
 
-    except Exception as e:
-        return func.HttpResponse(
-            "IMPORT ERROR: clinical_summary\n\n"
-            + str(e) + "\n\n" + traceback.format_exc(),
-            mimetype="text/plain"
-        )
+        ocr_text = analyze_document(pdf_bytes)
 
-    try:
-        pdf_bytes = req.get_body()
+        structured = extract_structured_data(ocr_text)
 
-# DEBUG: inspect first bytes
-        if not pdf_bytes:
-            return func.HttpResponse("No body received.", mimetype="text/plain")
+        if mode == "summary":
+            return func.HttpResponse(
+                generate_clinical_summary(ocr_text),
+                mimetype="text/plain"
+            )
 
-        preview = pdf_bytes[:20]
+        elif mode == "score":
+            score = calculate_score(structured)
+            return func.HttpResponse(
+                f"Insurability Score: {score['score']}/10",
+                mimetype="text/plain"
+            )
 
-        return func.HttpResponse(
-            f"First 20 bytes: {preview}",
-            mimetype="text/plain"
-)
-#        pdf_bytes = req.get_body()
-#
-#        if not pdf_bytes:
-#            return func.HttpResponse("No document uploaded.", mimetype="text/plain")
-#
-#        ocr_text = analyze_document(pdf_bytes)
-#
-#        structured = extract_structured_data(ocr_text)
-#
-#        score = calculate_score(structured)
-#
-#        summary = generate_clinical_summary(ocr_text)
-#
-#        return func.HttpResponse(
-#            summary
-#            + "\n\nScore: "
-#            + str(score.get("score")),
-#            mimetype="text/plain"
-#        )0
+        else:
+            score = calculate_score(structured)
+            summary = generate_clinical_summary(ocr_text)
+            return func.HttpResponse(
+                summary + f"\n\nInsurability Score: {score['score']}/10",
+                mimetype="text/plain"
+            )
 
     except Exception as e:
-
         return func.HttpResponse(
-            "RUNTIME ERROR\n\n"
+            "Error processing underwriting request.\n\n"
             + str(e)
             + "\n\n"
             + traceback.format_exc(),
+            status_code=500,
             mimetype="text/plain"
         )
