@@ -33,17 +33,40 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             )
 
         elif mode == "score":
-            score = calculate_score(structured)
+
+            result = calculate_score(structured)
+
+            explanation = "\n".join(
+                [f"• {driver}" for driver in result["drivers"]]
+            )
+
+            output_text = (
+                f"INSURABILITY SCORE: {result['score']} / 10\n\n"
+                f"Primary risk drivers:\n{explanation}"
+            )
+
             return func.HttpResponse(
-                f"Insurability Score: {score['score']}/10",
+                output_text,
                 mimetype="text/plain"
             )
 
         else:
-            score = calculate_score(structured)
+
+            result = calculate_score(structured)
             summary = generate_clinical_summary(ocr_text)
+
+            explanation = "\n".join(
+                [f"• {driver}" for driver in result["drivers"]]
+            )
+
+            output_text = (
+                summary +
+                f"\n\nINSURABILITY SCORE: {result['score']} / 10\n\n"
+                f"Primary risk drivers:\n{explanation}"
+            )
+
             return func.HttpResponse(
-                summary + f"\n\nInsurability Score: {score['score']}/10",
+                output_text,
                 mimetype="text/plain"
             )
 
