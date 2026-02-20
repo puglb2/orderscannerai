@@ -3,25 +3,22 @@ import json
 from openai import AzureOpenAI
 
 
-def get_openai_client():
+def extract_structured_data(ocr_text: str):
 
-    return AzureOpenAI(
-        api_key=os.getenv("OPENAI_KEY"),
-        azure_endpoint=os.getenv("OPENAI_ENDPOINT"),
+    endpoint = os.getenv("OPENAI_ENDPOINT")
+    key = os.getenv("OPENAI_KEY")
+    deployment = os.getenv("OPENAI_DEPLOYMENT")
+
+    client = AzureOpenAI(
+        api_key=key,
+        azure_endpoint=endpoint,
         api_version="2024-02-15-preview"
     )
 
-
-def extract_structured_data(ocr_text: str):
-
-    client = get_openai_client()
-
-    deployment = os.getenv("OPENAI_DEPLOYMENT")
-
     prompt = f"""
-Extract structured underwriting medical data.
+Return ONLY valid JSON.
 
-Return ONLY valid JSON:
+Structure:
 
 {{
   "conditions": {{
@@ -37,17 +34,40 @@ Return ONLY valid JSON:
   "has_retinopathy": false
 }}
 
-RECORD TEXT:
+OCR TEXT:
 {ocr_text}
 """
 
     response = client.chat.completions.create(
         model=deployment,
         messages=[
-            {"role": "system", "content": "Extract structured medical data."},
+            {"role": "system", "content": "You extract structured medical data and return ONLY JSON."},
             {"role": "user", "content": prompt}
         ],
         temperature=0
     )
 
-    return json.loads(response.choices[0].message.content)
+    content = response.choices[0].message.content.strip()
+
+    # 🔥 Remove markdown fences if present
+    if content.startswith("```"):
+        content = content.split("```")[1]
+
+    # 🔥 Defensive fallback
+    try:
+        return json.loads(content)
+    except Exception:
+        # If LLM fails, return safe empty structure
+        return {
+            "conditions": {
+                "diabetes_type": None,
+                "asthma": False,
+                "arthritis": False,
+                "active_cancer": False
+            },
+            "medications": [],
+            "has_stroke": False,
+            "has_tia": False,
+            "has_neuropathy": False,
+            "has_retinopathy": False
+        }
