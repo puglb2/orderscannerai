@@ -5,9 +5,15 @@ from openai import AzureOpenAI
 
 def extract_structured_data(ocr_text: str):
 
+    if not ocr_text or len(ocr_text.strip()) < 10:
+        raise RuntimeError("OCR text is empty or too short.")
+
     endpoint = os.getenv("OPENAI_ENDPOINT")
     key = os.getenv("OPENAI_KEY")
     deployment = os.getenv("OPENAI_DEPLOYMENT")
+
+    if not endpoint or not key or not deployment:
+        raise RuntimeError("Missing OpenAI environment variables.")
 
     client = AzureOpenAI(
         api_key=key,
@@ -16,22 +22,28 @@ def extract_structured_data(ocr_text: str):
     )
 
     prompt = f"""
-Return ONLY valid JSON.
+You are a medical underwriting data extraction engine.
 
-Structure:
+Return ONLY valid JSON.
+Do NOT include explanations.
+Do NOT include markdown.
+Do NOT include commentary.
+Do NOT wrap in ```json.
+
+Schema:
 
 {{
   "conditions": {{
-    "diabetes_type": null,
-    "asthma": false,
-    "arthritis": false,
-    "active_cancer": false
+    "diabetes_type": "type1" | "type2" | null,
+    "asthma": boolean,
+    "arthritis": boolean,
+    "active_cancer": boolean
   }},
-  "medications": [],
-  "has_stroke": false,
-  "has_tia": false,
-  "has_neuropathy": false,
-  "has_retinopathy": false
+  "medications": [string],
+  "has_stroke": boolean,
+  "has_tia": boolean,
+  "has_neuropathy": boolean,
+  "has_retinopathy": boolean
 }}
 
 OCR TEXT:
@@ -41,33 +53,31 @@ OCR TEXT:
     response = client.chat.completions.create(
         model=deployment,
         messages=[
-            {"role": "system", "content": "You extract structured medical data and return ONLY JSON."},
+            {"role": "system", "content": "Extract structured underwriting medical data and return strict JSON only."},
             {"role": "user", "content": prompt}
         ],
         temperature=0
     )
 
-    content = response.choices[0].message.content.strip()
+    content = response.choices[0].message.content
 
-    # 🔥 Remove markdown fences if present
+    if not content:
+        raise RuntimeError("LLM returned empty response.")
+
+    content = content.strip()
+
+    # Remove markdown fences if model still adds them
     if content.startswith("```"):
-        content = content.split("```")[1]
+        content = content.replace("```json", "")
+        content = content.replace("```", "")
+        content = content.strip()
 
-    # 🔥 Defensive fallback
     try:
-        return json.loads(content)
-    except Exception:
-        # If LLM fails, return safe empty structure
-        return {
-            "conditions": {
-                "diabetes_type": None,
-                "asthma": False,
-                "arthritis": False,
-                "active_cancer": False
-            },
-            "medications": [],
-            "has_stroke": False,
-            "has_tia": False,
-            "has_neuropathy": False,
-            "has_retinopathy": False
-        }
+        structured = json.loads(content)
+    except Exception as e:
+        raise RuntimeError(
+            "LLM returned invalid JSON.\n\nRaw Output:\n"
+            + content
+        )
+
+    return structured
