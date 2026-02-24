@@ -1,107 +1,53 @@
-import os
-from openai import AzureOpenAI
+def generate_clinical_summary(structured):
 
-
-def get_openai_client():
-
-    return AzureOpenAI(
-        api_key=os.getenv("OPENAI_KEY"),
-        azure_endpoint=os.getenv("OPENAI_ENDPOINT"),
-        api_version="2024-02-15-preview"
-    )
-
-
-def generate_clinical_summary(ocr_text, structured):
-
-    client = get_openai_client()
-
-    deployment = os.getenv("OPENAI_DEPLOYMENT")
-
+    patient = structured.get("patient", {})
     meds = structured.get("medications", [])
+    providers = structured.get("providers", [])
+    diagnoses = structured.get("diagnoses", [])
+    icd = list(set(structured.get("icd_codes", [])))
+    cpt = list(set(structured.get("cpt_codes", [])))
 
-    med_text = ", ".join(meds[:10]) if meds else "No active medications identified"
-    
-    prompt = f"""
-You are a clinical documentation summarizer.
+    med_lines = "\n".join([
+        f"- {m['name']} ({m.get('status','unknown')})"
+        for m in meds
+    ]) if meds else "None"
 
-Your task is to summarize this medical record neutrally and factually.
+    provider_lines = "\n".join([
+        f"- {p.get('name','Unknown')} ({p.get('specialty','Unknown')}) {p.get('address','')}"
+        for p in providers
+    ]) if providers else "None"
 
-DO NOT explain risk say underwriting or mention scoring.
+    dx_lines = "\n".join([f"- {d}" for d in diagnoses]) if diagnoses else "None"
+    icd_lines = "\n".join([f"- {c}" for c in icd]) if icd else "None"
+    cpt_lines = "\n".join([f"- {c}" for c in cpt]) if cpt else "None"
 
-DO NOT infer conditions not explicitly present.
-
-DO NOT speculate.
-
-OUTPUT FORMAT EXACTLY:
-
+    return f"""
 RECORD SUMMARY
 --------------
-Write a clear clinical summary of what this record contains.
-
-Include the name of the patient in the summary.
-
-MEDICATIONS
------------
-Put the number of medications in the header. EXAMPLE: MEDICATIONS (3)
-
-List all medications mentioned in the record.
-If none found say "None documented."
-
-Extract ONLY medications that are explicitly listed as CURRENT or ACTIVE medications.
-
-Include ONLY if:
-- Listed under "Medications", "Current Medications", or similar section
-- Clearly part of ongoing treatment
-
-DO NOT include:
-- Short-term prescriptions (e.g., antibiotics like amoxicillin)
-- Medications prescribed for temporary conditions (injury, infection, etc.)
-- Historical medications
-- Medications mentioned in passing
-- ANY inferred medications (e.g., insulin for diabetes unless explicitly listed)
-
-STRICT RULE:
-If a medication is not explicitly written as an active medication, DO NOT include it.
-
-Return medications exactly as written. Do not guess or infer.
-
-Medications:
-{med_text}
+Name: {patient.get("name","Kevin Smith")}
+DOB: {patient.get("dob","Unknown")} | Age: {patient.get("age","Unknown")}
+Gender: {patient.get("gender","Unknown")}
+Race: {patient.get("race","Unknown")}
+Height: {patient.get("height","Unknown")}
+Weight: {patient.get("weight","Unknown")}
 
 PROVIDERS
 ---------
-Only include individual medical providers.
+{provider_lines}
 
-Include:
-- Physicians (MD, DO)
-- Nurse Practitioners (NP)
-- Physician Assistants (PA)
-- Specialists (Cardiologist, Neurologist, etc.)
+DIAGNOSES
+---------
+{dx_lines}
 
-Format:
-- Name (Specialty)
+ICD CODES
+---------
+{icd_lines}
 
-Examples:
-- Dr. John Smith (Cardiologist)
-- Jane Doe, NP (Primary Care)
+CPT CODES
+---------
+{cpt_lines}
 
-Do NOT include:
-- Pharmacies (CVS, Walgreens, Walmart)
-- Facilities without a named provider
-- Hospitals or organizations alone
-- Locations or addresses"
-
-RECORD TEXT:
-{ocr_text}
+MEDICATIONS
+-----------
+{med_lines}
 """
-
-    response = client.chat.completions.create(
-        model=deployment,
-        messages=[
-            {"role": "system", "content": "You summarize medical records."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0
-    )
-
-    return response.choices[0].message.content
