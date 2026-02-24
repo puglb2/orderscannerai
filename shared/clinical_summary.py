@@ -34,9 +34,12 @@ RECORD SUMMARY
 --------------
 Write a clear clinical summary of what this record contains.
 
+Include the name of the patient in the summary.
 
 MEDICATIONS
 -----------
+Put the number of medications in the header. EXAMPLE: MEDICATIONS (3)
+
 List all medications mentioned in the record.
 If none found say "None documented."
 
