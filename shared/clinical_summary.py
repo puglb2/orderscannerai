@@ -1,25 +1,81 @@
-def generate_clinical_summary(structured):
+import os
+from openai import AzureOpenAI
+
+
+def generate_summary_paragraph(ocr_text: str):
+
+    client = AzureOpenAI(
+        api_key=os.getenv("OPENAI_KEY"),
+        azure_endpoint=os.getenv("OPENAI_ENDPOINT"),
+        api_version="2024-02-15-preview"
+    )
+
+    response = client.chat.completions.create(
+        model=os.getenv("OPENAI_DEPLOYMENT"),
+        messages=[
+            {
+                "role": "system",
+                "content": "Write a clean clinical summary of this medical record. Do NOT include scoring. Do NOT list bullet points."
+            },
+            {
+                "role": "user",
+                "content": ocr_text[:12000]  # prevent token overflow
+            }
+        ],
+        temperature=0.2
+    )
+
+    return response.choices[0].message.content.strip()
+
+
+def generate_clinical_summary(ocr_text, structured):
 
     patient = structured.get("patient", {})
     meds = structured.get("medications", [])
     providers = structured.get("providers", [])
     diagnoses = structured.get("diagnoses", [])
-    icd = list(set(structured.get("icd_codes", [])))
-    cpt = list(set(structured.get("cpt_codes", [])))
+    icd = structured.get("icd_codes", [])
+    cpt = structured.get("cpt_codes", [])
 
+    # -----------------------
+    # 🧠 REAL SUMMARY
+    # -----------------------
+    summary_text = generate_summary_paragraph(ocr_text)
+
+    # -----------------------
+    # FORMAT DIAG + ICD TOGETHER
+    # -----------------------
+    diag_lines = []
+
+    for i, d in enumerate(diagnoses):
+        code = icd[i] if i < len(icd) else ""
+        if code:
+            diag_lines.append(f"- {d} ({code})")
+        else:
+            diag_lines.append(f"- {d}")
+
+    diag_text = "\n".join(diag_lines) if diag_lines else "None"
+
+    # -----------------------
+    # MEDS
+    # -----------------------
     med_lines = "\n".join([
-        f"- {m['name']} ({m.get('status','unknown')})"
+        f"- {m.get('name')} ({m.get('status','unknown')})"
         for m in meds
     ]) if meds else "None"
 
+    # -----------------------
+    # PROVIDERS
+    # -----------------------
     provider_lines = "\n".join([
         f"- {p.get('name','Unknown')} ({p.get('specialty','Unknown')}) {p.get('address','')}"
         for p in providers
     ]) if providers else "None"
 
-    dx_lines = "\n".join([f"- {d}" for d in diagnoses]) if diagnoses else "None"
-    icd_lines = "\n".join([f"- {c}" for c in icd]) if icd else "None"
-    cpt_lines = "\n".join([f"- {c}" for c in cpt]) if cpt else "None"
+    # -----------------------
+    # CPT
+    # -----------------------
+    cpt_text = "\n".join(set(cpt)) if cpt else "None"
 
     return f"""
 RECORD SUMMARY
@@ -31,23 +87,23 @@ Race: {patient.get("race","Unknown")}
 Height: {patient.get("height","Unknown")}
 Weight: {patient.get("weight","Unknown")}
 
-PROVIDERS
----------
-{provider_lines}
+SUMMARY
+-------
+{summary_text}
 
-DIAGNOSES
----------
-{dx_lines}
-
-ICD CODES
----------
-{icd_lines}
-
-CPT CODES
----------
-{cpt_lines}
+DIAGNOSES (ICD)
+---------------
+{diag_text}
 
 MEDICATIONS
 -----------
 {med_lines}
+
+PROVIDERS
+---------
+{provider_lines}
+
+CPT CODES
+---------
+{cpt_text}
 """
