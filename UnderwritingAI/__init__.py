@@ -1,15 +1,11 @@
-# -----------------------
-# SUMMARY ONLY
-# -----------------------
+# SUMMARY
 if mode == "summary":
     return func.HttpResponse(
-        generate_clinical_summary(ocr_text),
+        generate_clinical_summary(structured),
         mimetype="text/plain"
     )
 
-# -----------------------
-# SCORE ONLY
-# -----------------------
+# SCORE
 if mode == "score":
     score, explanation = calculate_score(structured)
 
@@ -18,19 +14,11 @@ if mode == "score":
         mimetype="text/plain"
     )
 
-# -----------------------
 # BOTH
-# -----------------------
-summary = generate_clinical_summary(ocr_text, structured)
+summary = generate_clinical_summary(structured)
 score, explanation = calculate_score(structured)
 
-output = f"""
-{summary}
-
-INSURABILITY SCORE: {score}/10
-
-Primary drivers:
-{explanation}
-"""
-
-return func.HttpResponse(output, mimetype="text/plain")
+return func.HttpResponse(
+    f"{summary}\n\nINSURABILITY SCORE: {score}/10\n\nPrimary drivers:\n{explanation}",
+    mimetype="text/plain"
+)
