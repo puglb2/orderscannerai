@@ -1,81 +1,65 @@
+import json
 import azure.functions as func
-import traceback
+from shared.doc_intelligence import analyze_document
+from shared.llm_extract import extract_structured_data
+from shared.clinical_summary import generate_clinical_summary
+from shared.scoring import calculate_score
 
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
 
     try:
+        body = req.get_json()
+        mode = body.get("mode", "both")
 
-        mode = req.form.get("mode")
-        file = req.files.get("file")
+        pdf_base64 = body.get("documentBase64")
 
-        if not file:
-            return func.HttpResponse(
-                "No file uploaded.",
-                status_code=400
-            )
+        if not pdf_base64:
+            return func.HttpResponse("No document provided", status_code=400)
 
-        pdf_bytes = file.read()
-
-        from shared.doc_intelligence import analyze_document
-        from shared.llm_extract import extract_structured_data
-        from shared.scoring import calculate_score
-        from shared.clinical_summary import generate_clinical_summary
-
-        ocr_text = analyze_document(pdf_bytes)
-
+        ocr_text = analyze_document(pdf_base64)
         structured = extract_structured_data(ocr_text)
 
+        # -----------------------
+        # SUMMARY ONLY
+        # -----------------------
         if mode == "summary":
-            return func.HttpResponse(
-                generate_clinical_summary(ocr_text),
-                mimetype="text/plain"
-            )
+            summary = generate_clinical_summary(structured)
+            return func.HttpResponse(summary, mimetype="text/plain")
 
-        elif mode == "score":
+        # -----------------------
+        # SCORE ONLY
+        # -----------------------
+        if mode == "score":
+            score, explanation = calculate_score(structured)
 
-            result = calculate_score(structured)
+            output = f"""
+INSURABILITY SCORE: {score}/10
 
-            explanation = "\n".join(
-                [f"• {driver}" for driver in result["drivers"]]
-            )
+Primary drivers:
+{explanation}
+"""
+            return func.HttpResponse(output, mimetype="text/plain")
 
-            output_text = (
-                f"INSURABILITY SCORE: {result['score']} / 10\n\n"
-                f"Primary risk drivers:\n{explanation}"
-            )
+        # -----------------------
+        # BOTH
+        # -----------------------
+        summary = generate_clinical_summary(structured)
+        score, explanation = calculate_score(structured)
 
-            return func.HttpResponse(
-                output_text,
-                mimetype="text/plain"
-            )
+        output = f"""
+{summary}
 
-        else:
+INSURABILITY SCORE: {score}/10
 
-            result = calculate_score(structured)
-            summary = generate_clinical_summary(ocr_text, structured)
+Primary drivers:
+{explanation}
+"""
 
-            explanation = "\n".join(
-                [f"• {driver}" for driver in result["drivers"]]
-            )
-
-            output_text = (
-                summary +
-                f"\n\nINSURABILITY SCORE: {result['score']} / 10\n\n"
-                f"Primary risk drivers:\n{explanation}"
-            )
-
-            return func.HttpResponse(
-                output_text,
-                mimetype="text/plain"
-            )
+        return func.HttpResponse(output, mimetype="text/plain")
 
     except Exception as e:
         return func.HttpResponse(
-            "Error processing underwriting request.\n\n"
-            + str(e)
-            + "\n\n"
-            + traceback.format_exc(),
-            status_code=500,
-            mimetype="text/plain"
+            f"Error processing underwriting request.\n\n{str(e)}",
+            status_code=500
         )
