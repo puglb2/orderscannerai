@@ -53,7 +53,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         else:
 
             result = calculate_score(structured)
-            summary = generate_clinical_summary(ocr_text)
+            summary = generate_clinical_summary(ocr_text, structured)
 
             explanation = "\n".join(
                 [f"• {driver}" for driver in result["drivers"]]
