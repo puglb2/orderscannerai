@@ -28,6 +28,14 @@ def calculate_score(structured):
         score += 2
         drivers.append("Stroke")
 
+    if flags.get("depression"):
+        score += 2
+        drivers.append("Depression")
+
+    if flags.get("chest_pain"):
+        score += 2
+        drivers.append("Chest Pain")
+
     score = min(score, 10)
 
     explanation = "\n".join([f"• {d}" for d in drivers])
