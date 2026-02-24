@@ -43,6 +43,24 @@ Put the number of medications in the header. EXAMPLE: MEDICATIONS (3)
 List all medications mentioned in the record.
 If none found say "None documented."
 
+Extract ONLY medications that are explicitly listed as CURRENT or ACTIVE medications.
+
+Include ONLY if:
+- Listed under "Medications", "Current Medications", or similar section
+- Clearly part of ongoing treatment
+
+DO NOT include:
+- Short-term prescriptions (e.g., antibiotics like amoxicillin)
+- Medications prescribed for temporary conditions (injury, infection, etc.)
+- Historical medications
+- Medications mentioned in passing
+- ANY inferred medications (e.g., insulin for diabetes unless explicitly listed)
+
+STRICT RULE:
+If a medication is not explicitly written as an active medication, DO NOT include it.
+
+Return medications exactly as written. Do not guess or infer.
+
 PROVIDERS
 ---------
 Only include individual licensed medical providers.
