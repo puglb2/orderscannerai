@@ -17,6 +17,10 @@ def generate_clinical_summary(ocr_text: str):
 
     deployment = os.getenv("OPENAI_DEPLOYMENT")
 
+    meds = structured.get("medications", [])
+
+    med_text = ", ".join(meds[:10]) if meds else "No active medications identified"
+    
     prompt = f"""
 You are a clinical documentation summarizer.
 
@@ -60,6 +64,9 @@ STRICT RULE:
 If a medication is not explicitly written as an active medication, DO NOT include it.
 
 Return medications exactly as written. Do not guess or infer.
+
+Medications:
+{med_text}
 
 PROVIDERS
 ---------
