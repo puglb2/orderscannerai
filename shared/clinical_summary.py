@@ -34,6 +34,7 @@ RECORD SUMMARY
 --------------
 Write a clear clinical summary of what this record contains.
 
+
 MEDICATIONS
 -----------
 List all medications mentioned in the record.
@@ -41,8 +42,26 @@ If none found say "None documented."
 
 PROVIDERS
 ---------
-List all providers, doctors, clinics, or healthcare facilities mentioned.
-If none found say "None documented."
+Only include individual licensed medical providers.
+
+Include:
+- Physicians (MD, DO)
+- Nurse Practitioners (NP)
+- Physician Assistants (PA)
+- Specialists (Cardiologist, Neurologist, etc.)
+
+Format:
+- Name (Specialty)
+
+Examples:
+- Dr. John Smith (Cardiologist)
+- Jane Doe, NP (Primary Care)
+
+Do NOT include:
+- Pharmacies (CVS, Walgreens, Walmart)
+- Facilities without a named provider
+- Hospitals or organizations alone
+- Locations or addresses"
 
 RECORD TEXT:
 {ocr_text}
