@@ -3,7 +3,7 @@
 # -----------------------
 if mode == "summary":
     return func.HttpResponse(
-        generate_clinical_summary(ocr_text, structured),
+        generate_clinical_summary(ocr_text),
         mimetype="text/plain"
     )
 
