@@ -4,74 +4,100 @@ import re
 from openai import AzureOpenAI
 
 
-def _norm(s: str) -> str:
-    """Normalize text for robust substring matching."""
-    s = s.lower()
-    s = re.sub(r"[^a-z0-9\s]", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
+# -----------------------
+# Helpers
+# -----------------------
+
+def normalize_text(text: str) -> str:
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
 
-def _med_base_name(med: str) -> str:
+def medication_in_ocr(med: str, ocr_text: str) -> bool:
     """
-    Try to reduce 'Humalog U-100 insulin' -> 'humalog'
-    or 'Metoprolol tartrate 25 mg' -> 'metoprolol'
+    Ensures medication actually exists in OCR text
+    Prevents hallucinations like Humalog
     """
-    med_n = _norm(med)
-    # take first token as base if it's meaningful
-    parts = med_n.split()
-    return parts[0] if parts else med_n
+    med_norm = normalize_text(med)
+    ocr_norm = normalize_text(ocr_text)
+
+    # Check full string
+    if med_norm in ocr_norm:
+        return True
+
+    # Check base name (first word)
+    base = med_norm.split()[0]
+    if len(base) >= 4 and base in ocr_norm:
+        return True
+
+    return False
 
 
-def _keep_only_meds_seen_in_ocr(meds: list, ocr_text: str) -> list:
+def clean_medications(raw_meds, ocr_text):
     """
-    Hard guardrail: only keep meds whose full normalized string OR base name
-    appears in OCR text.
+    Deterministic cleanup layer (VERY IMPORTANT)
     """
-    ocr_n = _norm(ocr_text)
-    kept = []
 
-    for m in meds or []:
-        if not isinstance(m, str):
-            continue
-        m_stripped = m.strip()
-        if not m_stripped:
-            continue
+    if not isinstance(raw_meds, list):
+        return []
 
-        m_n = _norm(m_stripped)
-        base = _med_base_name(m_stripped)
+    EXCLUDE_TERMS = [
+        "amoxicillin",
+        "antibiotic",
+        "for infection",
+        "for pain",
+        "short course",
+        "temporary"
+    ]
 
-        # require literal evidence in OCR
-        if m_n and m_n in ocr_n:
-            kept.append(m_stripped)
-            continue
-        if base and len(base) >= 4 and base in ocr_n:
-            kept.append(m_stripped)
+    cleaned = []
+
+    for med in raw_meds:
+        if not isinstance(med, str):
             continue
 
-        # else: drop it (likely inference/hallucination)
+        med_clean = med.strip()
+        med_lower = med_clean.lower()
 
-    # de-dupe while preserving order
+        # ❌ Remove acute / temporary meds
+        if any(term in med_lower for term in EXCLUDE_TERMS):
+            continue
+
+        # ❌ Remove hallucinated meds
+        if not medication_in_ocr(med_clean, ocr_text):
+            continue
+
+        cleaned.append(med_clean)
+
+    # Remove duplicates
     seen = set()
-    out = []
-    for m in kept:
-        key = _norm(m)
+    final = []
+    for m in cleaned:
+        key = normalize_text(m)
         if key not in seen:
             seen.add(key)
-            out.append(m)
-    return out
+            final.append(m)
 
+    return final
+
+
+# -----------------------
+# Main extraction
+# -----------------------
 
 def extract_structured_data(ocr_text: str):
-    if not ocr_text or len(ocr_text.strip()) < 10:
-        raise RuntimeError("OCR text is empty or too short.")
+
+    if not ocr_text or len(ocr_text.strip()) < 20:
+        raise RuntimeError("OCR text is empty or invalid.")
 
     endpoint = os.getenv("OPENAI_ENDPOINT")
     key = os.getenv("OPENAI_KEY")
     deployment = os.getenv("OPENAI_DEPLOYMENT")
 
     if not endpoint or not key or not deployment:
-        raise RuntimeError("Missing OPENAI_ENDPOINT / OPENAI_KEY / OPENAI_DEPLOYMENT.")
+        raise RuntimeError("Missing OpenAI environment variables.")
 
     client = AzureOpenAI(
         api_key=key,
@@ -80,16 +106,24 @@ def extract_structured_data(ocr_text: str):
     )
 
     prompt = f"""
-You are extracting underwriting-relevant facts from OCR text.
+You are extracting structured medical underwriting data.
 
-Return ONLY valid JSON (no markdown, no commentary).
+Return ONLY valid JSON.
+Do NOT include explanations.
+Do NOT include markdown.
 
-CRITICAL RULES:
-- Do NOT infer medications. Only include meds explicitly listed as CURRENT/ACTIVE meds.
-- Do NOT include acute one-off meds (e.g., antibiotics for injury/infection) unless clearly ongoing.
-- If a med is mentioned as a past prescription or short course, exclude it.
+STRICT RULES:
+- Do NOT infer anything
+- Only extract what is explicitly written
+- If unsure, leave it null or false
+
+MEDICATION RULES:
+- Extract medications ONLY from a medication list or clearly active medications
+- DO NOT include short-term meds (e.g., antibiotics, injury meds)
+- DO NOT guess medications (e.g., insulin for diabetes unless explicitly written)
 
 Schema:
+
 {{
   "conditions": {{
     "diabetes_type": "type1" | "type2" | null,
@@ -111,27 +145,34 @@ OCR TEXT:
     response = client.chat.completions.create(
         model=deployment,
         messages=[
-            {"role": "system", "content": "Return strict JSON only."},
+            {"role": "system", "content": "Extract structured medical data. JSON only."},
             {"role": "user", "content": prompt}
         ],
         temperature=0
     )
 
-    content = (response.choices[0].message.content or "").strip()
-    if not content:
-        raise RuntimeError("LLM returned empty response.")
+    content = response.choices[0].message.content
 
-    # strip accidental code fences
+    if not content:
+        raise RuntimeError("Empty LLM response.")
+
+    content = content.strip()
+
+    # Remove markdown if present
     if content.startswith("```"):
         content = content.replace("```json", "").replace("```", "").strip()
 
-    structured = json.loads(content)
+    try:
+        structured = json.loads(content)
+    except Exception:
+        raise RuntimeError(f"Invalid JSON from LLM:\n\n{content}")
 
-    # HARD guardrail: remove hallucinated meds by requiring literal OCR evidence
-    meds = structured.get("medications", [])
-    if not isinstance(meds, list):
-        meds = []
-    structured["medications"] = _keep_only_meds_seen_in_ocr(meds, ocr_text)
+    # -----------------------
+    # 🔥 CRITICAL: ONE SOURCE OF TRUTH
+    # -----------------------
+    structured["medications"] = clean_medications(
+        structured.get("medications", []),
+        ocr_text
+    )
 
     return structured
-
