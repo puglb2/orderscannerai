@@ -11,7 +11,7 @@ def get_openai_client():
     )
 
 
-def generate_clinical_summary(ocr_text: str):
+def generate_clinical_summary(ocr_text, structured):
 
     client = get_openai_client()
 
