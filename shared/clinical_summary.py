@@ -1,100 +1,136 @@
 import os
+import json
+import re
 from openai import AzureOpenAI
 
 
-def get_openai_client():
+def _norm(s: str) -> str:
+    """Normalize text for robust substring matching."""
+    s = s.lower()
+    s = re.sub(r"[^a-z0-9\s]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
-    return AzureOpenAI(
-        api_key=os.getenv("OPENAI_KEY"),
-        azure_endpoint=os.getenv("OPENAI_ENDPOINT"),
+
+def _med_base_name(med: str) -> str:
+    """
+    Try to reduce 'Humalog U-100 insulin' -> 'humalog'
+    or 'Metoprolol tartrate 25 mg' -> 'metoprolol'
+    """
+    med_n = _norm(med)
+    # take first token as base if it's meaningful
+    parts = med_n.split()
+    return parts[0] if parts else med_n
+
+
+def _keep_only_meds_seen_in_ocr(meds: list, ocr_text: str) -> list:
+    """
+    Hard guardrail: only keep meds whose full normalized string OR base name
+    appears in OCR text.
+    """
+    ocr_n = _norm(ocr_text)
+    kept = []
+
+    for m in meds or []:
+        if not isinstance(m, str):
+            continue
+        m_stripped = m.strip()
+        if not m_stripped:
+            continue
+
+        m_n = _norm(m_stripped)
+        base = _med_base_name(m_stripped)
+
+        # require literal evidence in OCR
+        if m_n and m_n in ocr_n:
+            kept.append(m_stripped)
+            continue
+        if base and len(base) >= 4 and base in ocr_n:
+            kept.append(m_stripped)
+            continue
+
+        # else: drop it (likely inference/hallucination)
+
+    # de-dupe while preserving order
+    seen = set()
+    out = []
+    for m in kept:
+        key = _norm(m)
+        if key not in seen:
+            seen.add(key)
+            out.append(m)
+    return out
+
+
+def extract_structured_data(ocr_text: str):
+    if not ocr_text or len(ocr_text.strip()) < 10:
+        raise RuntimeError("OCR text is empty or too short.")
+
+    endpoint = os.getenv("OPENAI_ENDPOINT")
+    key = os.getenv("OPENAI_KEY")
+    deployment = os.getenv("OPENAI_DEPLOYMENT")
+
+    if not endpoint or not key or not deployment:
+        raise RuntimeError("Missing OPENAI_ENDPOINT / OPENAI_KEY / OPENAI_DEPLOYMENT.")
+
+    client = AzureOpenAI(
+        api_key=key,
+        azure_endpoint=endpoint,
         api_version="2024-02-15-preview"
     )
 
-
-def generate_clinical_summary(ocr_text: str):
-
-    client = get_openai_client()
-
-    deployment = os.getenv("OPENAI_DEPLOYMENT")
-
     prompt = f"""
-You are a clinical documentation summarizer.
+You are extracting underwriting-relevant facts from OCR text.
 
-Your task is to summarize this medical record neutrally and factually.
+Return ONLY valid JSON (no markdown, no commentary).
 
-DO NOT explain risk say underwriting or mention scoring.
+CRITICAL RULES:
+- Do NOT infer medications. Only include meds explicitly listed as CURRENT/ACTIVE meds.
+- Do NOT include acute one-off meds (e.g., antibiotics for injury/infection) unless clearly ongoing.
+- If a med is mentioned as a past prescription or short course, exclude it.
 
-DO NOT infer conditions not explicitly present.
+Schema:
+{{
+  "conditions": {{
+    "diabetes_type": "type1" | "type2" | null,
+    "asthma": boolean,
+    "arthritis": boolean,
+    "active_cancer": boolean
+  }},
+  "medications": [string],
+  "has_stroke": boolean,
+  "has_tia": boolean,
+  "has_neuropathy": boolean,
+  "has_retinopathy": boolean
+}}
 
-DO NOT speculate.
-
-OUTPUT FORMAT EXACTLY:
-
-RECORD SUMMARY
---------------
-Write a clear clinical summary of what this record contains.
-
-Include the name of the patient in the summary.
-
-MEDICATIONS
------------
-Put the number of medications in the header. EXAMPLE: MEDICATIONS (3)
-
-List all medications mentioned in the record.
-If none found say "None documented."
-
-Extract ONLY medications that are explicitly listed as CURRENT or ACTIVE medications.
-
-Include ONLY if:
-- Listed under "Medications", "Current Medications", or similar section
-- Clearly part of ongoing treatment
-
-DO NOT include:
-- Short-term prescriptions (e.g., antibiotics like amoxicillin)
-- Medications prescribed for temporary conditions (injury, infection, etc.)
-- Historical medications
-- Medications mentioned in passing
-- ANY inferred medications (e.g., insulin for diabetes unless explicitly listed)
-
-STRICT RULE:
-If a medication is not explicitly written as an active medication, DO NOT include it.
-
-Return medications exactly as written. Do not guess or infer.
-
-PROVIDERS
----------
-Only include individual licensed medical providers.
-
-Include:
-- Physicians (MD, DO)
-- Nurse Practitioners (NP)
-- Physician Assistants (PA)
-- Specialists (Cardiologist, Neurologist, etc.)
-
-Format:
-- Name (Specialty)
-
-Examples:
-- Dr. John Smith (Cardiologist)
-- Jane Doe, NP (Primary Care)
-
-Do NOT include:
-- Pharmacies (CVS, Walgreens, Walmart)
-- Facilities without a named provider
-- Hospitals or organizations alone
-- Locations or addresses"
-
-RECORD TEXT:
+OCR TEXT:
 {ocr_text}
 """
 
     response = client.chat.completions.create(
         model=deployment,
         messages=[
-            {"role": "system", "content": "You summarize medical records."},
+            {"role": "system", "content": "Return strict JSON only."},
             {"role": "user", "content": prompt}
         ],
         temperature=0
     )
 
-    return response.choices[0].message.content
+    content = (response.choices[0].message.content or "").strip()
+    if not content:
+        raise RuntimeError("LLM returned empty response.")
+
+    # strip accidental code fences
+    if content.startswith("```"):
+        content = content.replace("```json", "").replace("```", "").strip()
+
+    structured = json.loads(content)
+
+    # HARD guardrail: remove hallucinated meds by requiring literal OCR evidence
+    meds = structured.get("medications", [])
+    if not isinstance(meds, list):
+        meds = []
+    structured["medications"] = _keep_only_meds_seen_in_ocr(meds, ocr_text)
+
+    return structured
