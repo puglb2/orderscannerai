@@ -102,9 +102,14 @@ STRICT RULES:
 - If unsure, leave it null or false
 
 MEDICATION RULES:
-- Extract medications ONLY from a medication list or clearly active medications
+- Extract medications ONLY from a medication list
 - DO NOT include short-term meds (e.g., antibiotics, injury meds)
 - DO NOT guess medications (e.g., insulin for diabetes unless explicitly written)
+- Chronic medications
+
+IMPORTANT:
+It is better to include too many medications than to miss medications.
+We will filter later.
 
 Schema:
 
