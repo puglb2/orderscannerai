@@ -1,10 +1,68 @@
 import os
 import json
+import re
 from openai import AzureOpenAI
 
 
-def extract_structured_data(ocr_text: str):
+def _norm(s: str) -> str:
+    """Normalize text for robust substring matching."""
+    s = s.lower()
+    s = re.sub(r"[^a-z0-9\s]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
+
+def _med_base_name(med: str) -> str:
+    """
+    Try to reduce 'Humalog U-100 insulin' -> 'humalog'
+    or 'Metoprolol tartrate 25 mg' -> 'metoprolol'
+    """
+    med_n = _norm(med)
+    # take first token as base if it's meaningful
+    parts = med_n.split()
+    return parts[0] if parts else med_n
+
+
+def _keep_only_meds_seen_in_ocr(meds: list, ocr_text: str) -> list:
+    """
+    Hard guardrail: only keep meds whose full normalized string OR base name
+    appears in OCR text.
+    """
+    ocr_n = _norm(ocr_text)
+    kept = []
+
+    for m in meds or []:
+        if not isinstance(m, str):
+            continue
+        m_stripped = m.strip()
+        if not m_stripped:
+            continue
+
+        m_n = _norm(m_stripped)
+        base = _med_base_name(m_stripped)
+
+        # require literal evidence in OCR
+        if m_n and m_n in ocr_n:
+            kept.append(m_stripped)
+            continue
+        if base and len(base) >= 4 and base in ocr_n:
+            kept.append(m_stripped)
+            continue
+
+        # else: drop it (likely inference/hallucination)
+
+    # de-dupe while preserving order
+    seen = set()
+    out = []
+    for m in kept:
+        key = _norm(m)
+        if key not in seen:
+            seen.add(key)
+            out.append(m)
+    return out
+
+
+def extract_structured_data(ocr_text: str):
     if not ocr_text or len(ocr_text.strip()) < 10:
         raise RuntimeError("OCR text is empty or too short.")
 
@@ -13,7 +71,7 @@ def extract_structured_data(ocr_text: str):
     deployment = os.getenv("OPENAI_DEPLOYMENT")
 
     if not endpoint or not key or not deployment:
-        raise RuntimeError("Missing OpenAI environment variables.")
+        raise RuntimeError("Missing OPENAI_ENDPOINT / OPENAI_KEY / OPENAI_DEPLOYMENT.")
 
     client = AzureOpenAI(
         api_key=key,
@@ -22,16 +80,16 @@ def extract_structured_data(ocr_text: str):
     )
 
     prompt = f"""
-You are a medical underwriting data extraction engine.
+You are extracting underwriting-relevant facts from OCR text.
 
-Return ONLY valid JSON.
-Do NOT include explanations.
-Do NOT include markdown.
-Do NOT include commentary.
-Do NOT wrap in ```json.
+Return ONLY valid JSON (no markdown, no commentary).
+
+CRITICAL RULES:
+- Do NOT infer medications. Only include meds explicitly listed as CURRENT/ACTIVE meds.
+- Do NOT include acute one-off meds (e.g., antibiotics for injury/infection) unless clearly ongoing.
+- If a med is mentioned as a past prescription or short course, exclude it.
 
 Schema:
-
 {{
   "conditions": {{
     "diabetes_type": "type1" | "type2" | null,
@@ -53,31 +111,27 @@ OCR TEXT:
     response = client.chat.completions.create(
         model=deployment,
         messages=[
-            {"role": "system", "content": "Extract structured underwriting medical data and return strict JSON only."},
+            {"role": "system", "content": "Return strict JSON only."},
             {"role": "user", "content": prompt}
         ],
         temperature=0
     )
 
-    content = response.choices[0].message.content
-
+    content = (response.choices[0].message.content or "").strip()
     if not content:
         raise RuntimeError("LLM returned empty response.")
 
-    content = content.strip()
-
-    # Remove markdown fences if model still adds them
+    # strip accidental code fences
     if content.startswith("```"):
-        content = content.replace("```json", "")
-        content = content.replace("```", "")
-        content = content.strip()
+        content = content.replace("```json", "").replace("```", "").strip()
 
-    try:
-        structured = json.loads(content)
-    except Exception as e:
-        raise RuntimeError(
-            "LLM returned invalid JSON.\n\nRaw Output:\n"
-            + content
-        )
+    structured = json.loads(content)
+
+    # HARD guardrail: remove hallucinated meds by requiring literal OCR evidence
+    meds = structured.get("medications", [])
+    if not isinstance(meds, list):
+        meds = []
+    structured["medications"] = _keep_only_meds_seen_in_ocr(meds, ocr_text)
 
     return structured
+
