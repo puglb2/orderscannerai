@@ -36,21 +36,9 @@ def medication_in_ocr(med: str, ocr_text: str) -> bool:
 
 
 def clean_medications(raw_meds, ocr_text):
-    """
-    Deterministic cleanup layer (VERY IMPORTANT)
-    """
 
     if not isinstance(raw_meds, list):
         return []
-
-    EXCLUDE_TERMS = [
-        "amoxicillin",
-        "antibiotic",
-        "for infection",
-        "for pain",
-        "short course",
-        "temporary"
-    ]
 
     cleaned = []
 
@@ -59,19 +47,16 @@ def clean_medications(raw_meds, ocr_text):
             continue
 
         med_clean = med.strip()
-        med_lower = med_clean.lower()
-
-        # ❌ Remove acute / temporary meds
-        if any(term in med_lower for term in EXCLUDE_TERMS):
+        if not med_clean:
             continue
 
-        # ❌ Remove hallucinated meds
+        # Only enforce: must exist in OCR
         if not medication_in_ocr(med_clean, ocr_text):
             continue
 
         cleaned.append(med_clean)
 
-    # Remove duplicates
+    # Deduplicate
     seen = set()
     final = []
     for m in cleaned:
@@ -81,7 +66,6 @@ def clean_medications(raw_meds, ocr_text):
             final.append(m)
 
     return final
-
 
 # -----------------------
 # Main extraction
