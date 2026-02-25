@@ -89,7 +89,7 @@ Weight: {patient.get("weight","Unknown")}
     # MEDS
     # -----------------------
     med_lines = "\n".join([
-        f"- {m.get('name')} ({m.get('status','unknown')})"
+        f"- {m.get('name')}"
         for m in meds
     ]) if meds else "None"
 
