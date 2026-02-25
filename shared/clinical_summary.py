@@ -1,3 +1,49 @@
+import os
+from openai import AzureOpenAI
+
+
+# -----------------------
+# LLM SUMMARY (uses full OCR)
+# -----------------------
+def generate_summary_paragraph(ocr_text):
+
+    client = AzureOpenAI(
+        api_key=os.getenv("OPENAI_KEY"),
+        azure_endpoint=os.getenv("OPENAI_ENDPOINT"),
+        api_version="2024-02-15-preview"
+    )
+
+    prompt = f"""
+Write a clear clinical summary of this medical record.
+
+Requirements:
+- 1–2 paragraphs
+- Include key diagnoses and major conditions
+- Mention important medications if relevant
+- Mention major events (stroke, hospitalizations, complications)
+- Do NOT include underwriting or scoring
+- Do NOT use bullet points
+- Do NOT hallucinate — only use what is in the record
+
+Medical Record:
+{ocr_text}
+"""
+
+    response = client.chat.completions.create(
+        model=os.getenv("OPENAI_DEPLOYMENT"),
+        messages=[
+            {"role": "system", "content": "You are a clinical summarization assistant."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.2
+    )
+
+    return response.choices[0].message.content.strip()
+
+
+# -----------------------
+# MAIN SUMMARY BUILDER
+# -----------------------
 def generate_clinical_summary(structured):
 
     patient = structured.get("patient", {})
@@ -6,6 +52,7 @@ def generate_clinical_summary(structured):
     diagnoses = structured.get("diagnoses", [])
     icd = list(set(structured.get("icd_codes", [])))
     cpt = list(set(structured.get("cpt_codes", [])))
+    ocr_text = structured.get("raw_text", "")
 
     # -----------------------
     # DEMOGRAPHICS
@@ -21,12 +68,15 @@ Weight: {patient.get("weight","Unknown")}
 """
 
     # -----------------------
-    # BASIC SUMMARY (from structured only)
+    # REAL SUMMARY (LLM)
     # -----------------------
-    summary = "This record reflects a patient with documented medical conditions and ongoing care."
+    try:
+        summary = generate_summary_paragraph(ocr_text)
+    except Exception:
+        summary = "Summary unavailable."
 
     # -----------------------
-    # DIAG + ICD TOGETHER
+    # DIAG + ICD
     # -----------------------
     diag_lines = []
     for i, d in enumerate(diagnoses):
@@ -56,6 +106,9 @@ Weight: {patient.get("weight","Unknown")}
     # -----------------------
     cpt_text = "\n".join(cpt) if cpt else "None"
 
+    # -----------------------
+    # FINAL OUTPUT
+    # -----------------------
     return f"""{header}
 
 SUMMARY
