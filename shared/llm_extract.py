@@ -57,6 +57,9 @@ Schema:
     "chf": false,
     "heart_disease": false,
     "stroke": false
+    "depression": false
+    "anxiety": false
+    "chest_pain": false
   }}
 }}
 
