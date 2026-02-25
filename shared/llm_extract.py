@@ -30,7 +30,9 @@ Schema:
     "gender": null,
     "race": null,
     "height": null,
-    "weight": null
+    "weight": null,
+    "bmi": null,
+    "smoking_status": null
   }},
   "medications": [
     {{
