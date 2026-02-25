@@ -83,4 +83,9 @@ OCR TEXT:
     if content.startswith("```"):
         content = content.replace("```json", "").replace("```", "").strip()
 
-    return json.loads(content)
+    structured = json.loads(content)
+
+    # ✅ ADD THIS LINE
+    structured["raw_text"] = ocr_text
+
+    return structured
