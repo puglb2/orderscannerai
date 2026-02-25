@@ -65,6 +65,8 @@ Gender: {patient.get("gender","Unknown")}
 Race: {patient.get("race","Unknown")}
 Height: {patient.get("height","Unknown")}
 Weight: {patient.get("weight","Unknown")}
+bmi = {patient.get("bmi")}
+smoking = {patient.get("smoking_status", "Unknown")}
 """
 
     # -----------------------
