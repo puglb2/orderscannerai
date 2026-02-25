@@ -28,7 +28,7 @@ def calculate_score(structured):
         score += 2
         drivers.append("Stroke")
 
-    if flags.get("depression/anxiety"):
+    if flags.get("depression") or flags.get("anxiety"):
         score += 2
         drivers.append("Depression/Anxiety")
 
