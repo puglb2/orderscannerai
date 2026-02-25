@@ -57,7 +57,7 @@ def generate_clinical_summary(structured):
     # -----------------------
     # DEMOGRAPHICS
     # -----------------------
-    header = f"""RECORD SUMMARY
+    header = f"""Patient Demographic
 --------------
 Name: {patient.get("name","Kevin Smith")}
 DOB: {patient.get("dob","Unknown")} | Age: {patient.get("age","Unknown")}
@@ -65,8 +65,8 @@ Gender: {patient.get("gender","Unknown")}
 Race: {patient.get("race","Unknown")}
 Height: {patient.get("height","Unknown")}
 Weight: {patient.get("weight","Unknown")}
-bmi = {patient.get("bmi")}
-smoking = {patient.get("smoking_status", "Unknown")}
+bmi: {patient.get("bmi")}
+smoking: {patient.get("smoking_status", "Unknown")}
 """
 
     # -----------------------
