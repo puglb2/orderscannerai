@@ -34,6 +34,9 @@ def calculate_score(structured):
     if flags.get("stroke"):
         add(2.5, "Stroke history")
 
+    if flags.get("chest_pain"):
+        add(1.5, "Chest Pain")
+
     if flags.get("depression") or flags.get("anxiety"):
         add(1.5, "Mental health condition")
 
