@@ -1,43 +1,63 @@
 def calculate_score(structured):
 
     flags = structured.get("flags", {})
-    score = 0
+    meds = structured.get("medications", [])
+
+    score = 0.0
     drivers = []
 
-    if flags.get("diabetes"):
-        score += 2
-        drivers.append("Diabetes")
+    # -----------------------
+    # CORE CONDITIONS
+    # -----------------------
 
     if flags.get("cancer"):
-        score += 5
-        drivers.append("Cancer")
+        score += 5.0
+        drivers.append("Active cancer")
+
+    if flags.get("diabetes"):
+        score += 2.5
+        drivers.append("Diabetes")
 
     if flags.get("chf"):
-        score += 3
-        drivers.append("Congestive Heart Failure")
+        score += 3.0
+        drivers.append("Congestive heart failure")
 
     if flags.get("copd"):
-        score += 2
+        score += 2.0
         drivers.append("COPD")
 
     if flags.get("heart_disease"):
-        score += 2
-        drivers.append("Heart Disease")
+        score += 2.0
+        drivers.append("Heart disease")
 
     if flags.get("stroke"):
-        score += 2
-        drivers.append("Stroke")
+        score += 2.5
+        drivers.append("Stroke history")
 
     if flags.get("depression") or flags.get("anxiety"):
-        score += 2
-        drivers.append("Depression/Anxiety")
+        score += 1.5
+        drivers.append("Mental health condition")
 
-    if flags.get("chest_pain"):
-        score += 2
-        drivers.append("Chest Pain")
+    # -----------------------
+    # MEDICATION COMPLEXITY
+    # -----------------------
 
-    score = min(score, 10)
+    med_count = len(meds)
 
-    explanation = "\n".join([f"• {d}" for d in drivers])
+    if med_count >= 20:
+        score += 1.0
+        drivers.append("High medication burden (20+)")
+
+    elif med_count >= 10:
+        score += 0.5
+        drivers.append("Moderate medication burden (10+)")
+
+    # -----------------------
+    # NORMALIZE SCORE
+    # -----------------------
+
+    score = min(score, 10.0)
+
+    explanation = "\n".join([f"- {d}" for d in drivers])
 
     return score, explanation
